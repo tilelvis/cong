@@ -1,0 +1,13 @@
+
+> miniapp-boilerplate@1.0.0 dev
+> next dev
+
+▲ Next.js 16.2.2 (Turbopack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.0.2:3000
+- Environments: .env
+✓ Ready in 541ms
+
+○ Compiling / ...
+ GET / 200 in 6.0s (next.js: 5.5s, application-code: 471ms)
+[browser] [@alien_org/react] Bridge is not available. Running in dev mode? The SDK will handle errors gracefully, but bridge communication will not work.
