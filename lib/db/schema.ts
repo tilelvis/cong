@@ -89,7 +89,6 @@ export const transactions = pgTable("transactions", {
 
 export type Transaction = typeof transactions.$inferSelect;
 
-// Relations
 export const usersRelations = relations(users, ({ one, many }) => ({
   wallet: one(gameWallets, {
     fields: [users.alienId],
