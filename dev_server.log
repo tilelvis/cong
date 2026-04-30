@@ -11,3 +11,6 @@
 ○ Compiling / ...
  GET / 200 in 6.0s (next.js: 5.5s, application-code: 471ms)
 [browser] [@alien_org/react] Bridge is not available. Running in dev mode? The SDK will handle errors gracefully, but bridge communication will not work.
+✓ Compiled in 3.6s
+ GET / 200 in 1187ms (next.js: 616ms, application-code: 571ms)
+[browser] [@alien_org/react] Bridge is not available. Running in dev mode? The SDK will handle errors gracefully, but bridge communication will not work.
