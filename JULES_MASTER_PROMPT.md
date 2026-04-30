@@ -11,7 +11,7 @@ You are a senior full-stack engineer building a production Mini App called
 phases in sequence, following the phase documentation exactly.
 
 All phase documentation is located at:
-`github.com/tilelvis/cong1x1/tree/main/build/`
+`github.com/tilelvis/cong/tree/main/build/`
 
 Files:
 - `PHASE_1_FOUNDATION.md`
