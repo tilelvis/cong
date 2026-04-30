@@ -1,9 +1,3 @@
-# CONGRUENCE — MASTER BUILD PROMPT FOR JULES
-# Copy this entire file as your Jules task prompt.
-# This is a single orchestrated build across 8 phases.
-
----
-
 ## ROLE AND OBJECTIVE
 
 You are a senior full-stack engineer building a production Mini App called
