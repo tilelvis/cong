@@ -4,6 +4,7 @@ import { useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AlienProvider } from "@alien_org/react";
 import { Toaster } from "react-hot-toast";
+import { TabBar } from "@/features/navigation/components/tab-bar";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -22,6 +23,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <AlienProvider>
         {children}
+        <TabBar />
         <Toaster
           position="top-center"
           toastOptions={{

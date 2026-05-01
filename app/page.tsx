@@ -1,490 +1,434 @@
-'use client';
+"use client";
 
-import { useAlien } from '@alien_org/react';
-import { useEffect, useState, useCallback } from 'react';
-import { GameWallet } from '@/components/GameWallet';
-import { GameBoard } from '@/components/GameBoard';
-import {
-  getOverallRank, getNextRank,
-  getNoviceBadge, getSoldierBadge, getExpertBadge,
-  NOVICE_BADGES, SOLDIER_BADGES, EXPERT_BADGES,
-} from '@/lib/badges';
-import {
-  LEVEL_CONFIGS, type DifficultyLevel, type Puzzle, type ScoreBreakdown,
-} from '@/lib/puzzle-engine';
-import { sanitize } from '@/lib/sanitize';
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useAlien } from "@alien_org/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { sanitize } from "@/lib/sanitize";
+import { GameBoard } from "@/components/GameBoard";
+import { LEVEL_CONFIGS, type DifficultyLevel, type Puzzle, type ScoreBreakdown } from "@/lib/puzzle-engine";
+import toast from "react-hot-toast";
 
-type Screen = 'home'|'levels'|'playing'|'result'|'wallet'|'leaderboard'|'profile';
+// ── Types ────────────────────────────────────────────────────────────────────
 
-interface WalletData {
-  trials: number; total_points: number;
-  novice_points: number; soldier_points: number; expert_points: number;
-  games_won: number; games_played: number;
-  current_streak: number; best_streak: number;
+interface Wallet {
+  trials: number;
+  total_points: number;
+  novice_points: number;
+  soldier_points: number;
+  expert_points: number;
+  games_won: number;
+  games_played: number;
+  current_streak: number;
+  best_streak: number;
 }
-interface SessionData { sessionId: string; puzzle: Omit<Puzzle,'solution'>; trialsRemaining: number; }
-interface LeaderboardEntry { alien_id: string; total_points: number; games_won: number; games_played: number; rank: number; }
 
-const C = {
-  bg:'#04060f', surface:'#080d1a', surface2:'#0d1526',
-  green:'#00ffb4', gold:'#f5c542', red:'#ff4d6d',
-  text:'#e2e8f0', muted:'#4a5568',
-};
+interface ActiveGame {
+  sessionId: string;
+  level: DifficultyLevel;
+  puzzle: Puzzle;
+}
 
-export default function Home() {
-  const { authToken, isBridgeAvailable } = useAlien();
-  const [screen, setScreen] = useState<Screen>('home');
-  const [wallet, setWallet] = useState<WalletData|null>(null);
-  const [session, setSession] = useState<SessionData|null>(null);
-  const [score, setScore] = useState<ScoreBreakdown|null>(null);
-  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
-  const [myRank, setMyRank] = useState<any>(null);
-  const [error, setError] = useState<string|null>(null);
-  const [starting, setStarting] = useState(false);
+interface GameResult {
+  won: boolean;
+  score: ScoreBreakdown;
+}
 
-  const fetchWallet = useCallback(async () => {
-    if (!authToken) return;
-    const res = await fetch('/api/game-wallet', { headers:{ Authorization:`Bearer ${authToken}` } });
-    if (res.ok) setWallet(await res.json());
-  }, [authToken]);
+interface LeaderboardEntry {
+  alien_id: string;
+  total_points: number;
+  games_won: number;
+  games_played: number;
+  rank: number;
+}
 
-  const fetchLeaderboard = useCallback(async () => {
-    if (!authToken) return;
-    const res = await fetch('/api/leaderboard', { headers:{ Authorization:`Bearer ${authToken}` } });
-    if (res.ok) { const d = await res.json(); setLeaderboard(d.leaderboard); setMyRank(d.me); }
-  }, [authToken]);
+// ── Badge helper ──────────────────────────────────────────────────────────────
 
-  useEffect(() => { fetchWallet(); }, [fetchWallet]);
+function getBadgeName(points: number): string {
+  if (points >= 10000) return "OVERLORD";
+  if (points >= 5000) return "WARLORD";
+  if (points >= 2000) return "COMMANDER";
+  if (points >= 500) return "SOLDIER";
+  if (points >= 100) return "CADET";
+  return "RECRUIT";
+}
 
-  async function startGame(level: DifficultyLevel) {
-    if (!authToken || starting) return;
-    setStarting(true); setError(null);
-    const res = await fetch('/api/game/start', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${authToken}` },
-      body: JSON.stringify({ level }),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(()=>({}));
-      setError(res.status===402 ? 'No trials left. Buy more to continue.' : err.error ?? 'Failed');
-      setStarting(false); return;
+// ── Fetch helpers ─────────────────────────────────────────────────────────────
+
+async function fetchWallet(token: string): Promise<Wallet> {
+  const res = await fetch("/api/game-wallet", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Failed to fetch wallet");
+  return res.json();
+}
+
+async function fetchLeaderboard(token: string): Promise<{ leaderboard: LeaderboardEntry[]; me: LeaderboardEntry | null }> {
+  const res = await fetch("/api/leaderboard", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) throw new Error("Failed to fetch leaderboard");
+  return res.json();
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
+export default function HomePage() {
+  const { authToken } = useAlien();
+  const queryClient = useQueryClient();
+
+  const [selectedLevel, setSelectedLevel] = useState<DifficultyLevel>("cadet");
+  const [isStarting, setIsStarting] = useState(false);
+  const [activeGame, setActiveGame] = useState<ActiveGame | null>(null);
+  const [trialsRemaining, setTrialsRemaining] = useState(0);
+  const [result, setResult] = useState<GameResult | null>(null);
+
+  const { data: wallet } = useQuery({
+    queryKey: ["wallet"],
+    queryFn: () => fetchWallet(authToken!),
+    enabled: !!authToken,
+    refetchInterval: 30000,
+  });
+
+  const { data: lbData } = useQuery({
+    queryKey: ["leaderboard"],
+    queryFn: () => fetchLeaderboard(authToken!),
+    enabled: !!authToken,
+  });
+
+  const leaderboard = lbData?.leaderboard ?? [];
+  const myAlienId = lbData?.me?.alien_id;
+
+  // ── Start game ──────────────────────────────────────────────────────────────
+
+  const startGame = async () => {
+    if (!authToken || isStarting) return;
+    setIsStarting(true);
+    try {
+      const res = await fetch("/api/game/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ level: selectedLevel }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error ?? "Failed to start mission");
+        return;
+      }
+      const data = await res.json();
+      setTrialsRemaining(data.trialsRemaining);
+      setActiveGame({ sessionId: data.sessionId, level: selectedLevel, puzzle: data.puzzle });
+      setResult(null);
+    } catch {
+      toast.error("Connection failure. Try again.");
+    } finally {
+      setIsStarting(false);
     }
-    const data = await res.json();
-    setSession(data);
-    setWallet(prev => prev ? { ...prev, trials: data.trialsRemaining } : null);
-    setScreen('playing');
-    setStarting(false);
-  }
+  };
 
-  async function handleSolve(timeTakenMs: number, hintsUsed: number, errorCount: number) {
-    if (!authToken || !session) return;
-    const res = await fetch('/api/game/submit', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${authToken}` },
-      body: JSON.stringify({ sessionId: session.sessionId, timeTakenMs, hintsUsed, errorCount }),
-    });
-    if (res.ok) { setScore((await res.json()).score); setScreen('result'); fetchWallet(); }
-  }
+  // ── Solve ───────────────────────────────────────────────────────────────────
 
-  async function handleQuit() {
-    if (!authToken || !session) return;
-    await fetch('/api/game/fail', {
-      method:'POST',
-      headers:{ 'Content-Type':'application/json', Authorization:`Bearer ${authToken}` },
-      body: JSON.stringify({ sessionId: session.sessionId }),
-    });
-    setSession(null); fetchWallet(); setScreen('home');
-  }
+  const handleSolve = useCallback(async (params: { timeTakenMs: number; hintsUsed: number; errorCount: number }) => {
+    if (!authToken || !activeGame) return;
+    try {
+      const res = await fetch("/api/game/submit", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ sessionId: activeGame.sessionId, ...params }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast.error(err.error ?? "Failed to submit");
+        return;
+      }
+      const data = await res.json();
+      setResult({ won: true, score: data.score });
+      setActiveGame(null);
+      queryClient.invalidateQueries({ queryKey: ["wallet"] });
+      queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+    } catch {
+      toast.error("Network error on submit.");
+    }
+  }, [authToken, activeGame, queryClient]);
 
-  if (!isBridgeAvailable) return (
-    <div style={{ minHeight:'100vh', background:C.bg, display:'flex',
-      alignItems:'center', justifyContent:'center', flexDirection:'column', gap:16 }}>
-      <div style={{ fontSize:72 }} className="float">🛸</div>
-      <p style={{ color:C.muted, fontFamily:'monospace', fontSize:13 }}>Open inside the Alien app</p>
-    </div>
-  );
+  // ── Fail / abort ────────────────────────────────────────────────────────────
 
-  if (!wallet) return (
-    <div style={{ minHeight:'100vh', background:C.bg, display:'flex',
-      alignItems:'center', justifyContent:'center' }}>
-      <div style={{ width:28, height:28, border:`2px solid ${C.green}`,
-        borderTopColor:'transparent', borderRadius:'50%' }} className="spin" />
-    </div>
-  );
+  const handleFail = useCallback(async () => {
+    if (!authToken || !activeGame) return;
+    try {
+      await fetch("/api/game/fail", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
+        },
+        body: JSON.stringify({ sessionId: activeGame.sessionId }),
+      });
+    } catch {}
+    setResult({ won: false, score: { base: 0, timeBonus: 0, hintPenalty: 0, errorPenalty: 0, streakBonus: 0, final: 0 } });
+    setActiveGame(null);
+    queryClient.invalidateQueries({ queryKey: ["wallet"] });
+  }, [authToken, activeGame, queryClient]);
 
-  const rank = getOverallRank(wallet.total_points);
-  const nextRank = getNextRank(wallet.total_points);
+  const resetGame = () => {
+    setResult(null);
+    queryClient.invalidateQueries({ queryKey: ["wallet"] });
+    queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
+  };
 
-  if (screen === 'wallet') return (
-    <GameWallet trials={wallet.trials} onClose={() => setScreen('home')} onTrialsUpdated={fetchWallet} />
-  );
+  // ── RESULT SCREEN ───────────────────────────────────────────────────────────
 
-  if (screen === 'playing' && session) {
-    const config = LEVEL_CONFIGS[session.puzzle.level];
+  if (result) {
     return (
-      <div style={{ minHeight:'100vh', background:C.bg, display:'flex',
-        flexDirection:'column', padding:'14px 14px 24px' }} className="fade-in">
-        <GameBoard puzzle={session.puzzle as Puzzle} hintsAllowed={config.hintAllowance}
-          onSolve={handleSolve} onQuit={handleQuit} />
+      <div className="flex flex-col items-center justify-center min-h-screen px-4 py-8">
+        <div className="w-full hud-card border-glow p-6 text-center space-y-4">
+          <div
+            className={`text-3xl font-black uppercase tracking-widest ${result.won ? "text-[var(--alien-energy)] glow-energy" : "text-[var(--alien-danger)]"}`}
+            style={{ fontFamily: "var(--font-display)" }}
+          >
+            {result.won ? "◈ MISSION SUCCESS" : "✕ MISSION FAILED"}
+          </div>
+
+          {result.won && (
+            <div className="space-y-3 mt-4">
+              {[
+                { label: "BASE SCORE", val: result.score.base.toString() },
+                { label: "TIME BONUS", val: `+${result.score.timeBonus}` },
+                { label: "HINT PENALTY", val: `-${result.score.hintPenalty}` },
+                { label: "ERROR PENALTY", val: `-${result.score.errorPenalty}` },
+                { label: "STREAK BONUS", val: `+${result.score.streakBonus}` },
+              ].map(({ label, val }) => (
+                <div key={label} className="flex justify-between items-center border-b border-[var(--alien-border)] pb-2">
+                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-xs tracking-widest uppercase">{label}</span>
+                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text)] text-sm">{val}</span>
+                </div>
+              ))}
+              <div className="flex justify-between items-center pt-2">
+                <span style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-plasma)] text-sm uppercase tracking-widest">TOTAL</span>
+                <span style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-energy)] text-2xl font-black glow-energy">{result.score.final}</span>
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={resetGame}
+            style={{ fontFamily: "var(--font-display)" }}
+            className="w-full mt-4 py-3 rounded-lg border border-[var(--alien-plasma)] text-[var(--alien-plasma)] glow-plasma text-sm uppercase tracking-widest hover:bg-[#00f0ff10] transition-colors"
+          >
+            ◄ RETURN TO BASE
+          </button>
+        </div>
       </div>
     );
   }
 
-  if (screen === 'result' && score) return (
-    <div style={{ minHeight:'100vh', background:C.bg, display:'flex', flexDirection:'column',
-      alignItems:'center', justifyContent:'center', padding:24, gap:16 }} className="fade-in">
-      <div style={{ fontSize:80 }} className="float">🏆</div>
-      <div style={{ textAlign:'center' }}>
-        <div style={{ fontFamily:'monospace', fontSize:24, fontWeight:900,
-          color:C.green, letterSpacing:'0.1em' }} className="glow">PUZZLE SOLVED</div>
-        {wallet.current_streak >= 3 && (
-          <div style={{ color:C.gold, fontSize:13, fontFamily:'monospace', marginTop:4 }}>
-            🔥 {wallet.current_streak} WIN STREAK!
+  // ── ACTIVE GAME ─────────────────────────────────────────────────────────────
+
+  if (activeGame) {
+    return (
+      <div className="flex flex-col min-h-screen">
+        {/* HUD top bar */}
+        <div
+          className="border-b border-[var(--alien-border)] px-4 py-2.5 flex items-center justify-between"
+          style={{ background: "rgba(6,13,26,0.95)", boxShadow: "0 1px 0 var(--alien-border-glow), 0 4px 20px #00f0ff08" }}
+        >
+          <button
+            onClick={handleFail}
+            style={{ fontFamily: "var(--font-mono)" }}
+            className="text-[var(--alien-warning)] text-xs tracking-widest uppercase hover:opacity-70 transition-opacity"
+          >
+            ◄ ABORT
+          </button>
+          <div style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-plasma)] text-xs glow-plasma uppercase tracking-widest">
+            {activeGame.level.toUpperCase()} PROTOCOL
           </div>
-        )}
-      </div>
-      <div style={{ background:C.surface, border:`1px solid ${C.green}20`,
-        borderRadius:18, padding:20, width:'100%' }}>
-        <div style={{ textAlign:'center', marginBottom:16 }}>
-          <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace',
-            letterSpacing:'0.1em', marginBottom:4 }}>FINAL SCORE</div>
-          <div style={{ fontFamily:'monospace', fontSize:56, fontWeight:900,
-            color:C.gold, lineHeight:1 }} className="glow">{score.final.toLocaleString()}</div>
+          <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-dim)] text-xs">
+            ⬡ {trialsRemaining}
+          </div>
         </div>
-        <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+
+        <GameBoard
+          puzzle={activeGame.puzzle}
+          level={activeGame.level}
+          onSolve={handleSolve}
+          onFail={handleFail}
+        />
+      </div>
+    );
+  }
+
+  // ── HOME SCREEN ─────────────────────────────────────────────────────────────
+
+  const levels: DifficultyLevel[] = ["cadet", "scout", "ranger", "warlord", "phantom", "alien-mind"];
+
+  return (
+    <div className="px-4 py-6 pb-28 space-y-5">
+      {/* Header */}
+      <div className="text-center pt-4 pb-2">
+        <div
+          className="text-5xl mb-3 alien-flicker"
+          style={{ filter: "drop-shadow(0 0 24px var(--alien-plasma))" }}
+        >
+          🛸
+        </div>
+        <h1
+          style={{ fontFamily: "var(--font-display)", letterSpacing: "0.2em" }}
+          className="text-2xl font-black text-[var(--alien-plasma)] glow-plasma uppercase"
+        >
+          CONGRUENCE
+        </h1>
+        <p style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-dim)] text-[10px] mt-1 tracking-[0.25em] uppercase">
+          NEURAL GRID PROTOCOL v2.4
+        </p>
+      </div>
+
+      {/* Rank + stats */}
+      <div className="hud-card p-4 space-y-4">
+        {/* Clearance level */}
+        <div className="text-center">
+          <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-[0.35em] uppercase mb-1">
+            CLEARANCE LEVEL
+          </div>
+          <div style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-gold)] text-xl font-black glow-gold">
+            {getBadgeName(wallet?.total_points ?? 0)}
+          </div>
+        </div>
+
+        {/* Divider */}
+        <div className="border-t border-[var(--alien-border)]" />
+
+        {/* 2×2 stat grid */}
+        <div className="grid grid-cols-2 gap-2">
           {[
-            { label:'Base Score',    val:score.base,         color:C.text,  sign:'+' },
-            { label:'Time Bonus',    val:score.timeBonus,    color:C.green, sign:'+' },
-            { label:'Hint Penalty',  val:score.hintPenalty,  color:score.hintPenalty>0?C.red:C.muted,  sign:'-' },
-            { label:'Error Penalty', val:score.errorPenalty, color:score.errorPenalty>0?C.red:C.muted, sign:'-' },
-            { label:'Streak Bonus',  val:score.streakBonus,  color:score.streakBonus>0?C.gold:C.muted, sign:'+' },
-          ].map(row => (
-            <div key={row.label} style={{ display:'flex', justifyContent:'space-between',
-              fontFamily:'monospace', fontSize:12, padding:'4px 0',
-              borderBottom:`1px solid rgba(255,255,255,0.04)` }}>
-              <span style={{ color:C.muted }}>{row.label}</span>
-              <span style={{ color:row.val===0?C.muted:row.color, fontWeight:700 }}>
-                {row.val===0?'—':`${row.sign}${row.val.toLocaleString()}`}
-              </span>
+            { icon: "⬡", val: wallet?.games_played ?? 0, label: "MISSIONS", color: "var(--alien-plasma)", glow: "glow-plasma" },
+            { icon: "◈", val: wallet?.games_won ?? 0, label: "VICTORIES", color: "var(--alien-energy)", glow: "glow-energy" },
+            { icon: "⚡", val: wallet?.current_streak ?? 0, label: "STREAK", color: "var(--alien-gold)", glow: "glow-gold" },
+            { icon: "◉", val: (wallet?.total_points ?? 0).toLocaleString(), label: "INTEL PTS", color: "var(--alien-plasma)", glow: "glow-plasma" },
+          ].map(({ icon, val, label, color, glow }) => (
+            <div key={label} className="bg-[var(--alien-void)] border border-[var(--alien-border)] rounded-lg p-3 flex flex-col items-center gap-1">
+              <span className="text-lg" style={{ color, filter: `drop-shadow(0 0 6px ${color})` }}>{icon}</span>
+              <span style={{ fontFamily: "var(--font-mono)", color }} className={`text-xl font-bold ${glow}`}>{val}</span>
+              <span style={{ fontFamily: "var(--font-body)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-widest uppercase">{label}</span>
             </div>
           ))}
         </div>
       </div>
-      <div style={{ display:'flex', gap:10, width:'100%' }}>
-        <button onClick={() => { setScore(null); setError(null); setScreen('levels'); }}
-          style={{ flex:1, padding:16, borderRadius:12, border:'none',
-            background:`linear-gradient(135deg,${C.green},#00b4ff)`,
-            color:C.bg, fontSize:14, fontWeight:900, fontFamily:'monospace', cursor:'pointer' }}>
-          PLAY AGAIN
-        </button>
-        <button onClick={() => { setScore(null); setScreen('home'); }}
-          style={{ flex:1, padding:16, borderRadius:12, border:`1px solid rgba(255,255,255,0.06)`,
-            background:C.surface, color:C.text, fontSize:14, fontFamily:'monospace', cursor:'pointer' }}>
-          HOME
-        </button>
-      </div>
-    </div>
-  );
 
-  if (screen === 'levels') {
-    const diffs = [
-      { key:'cadet' as DifficultyLevel,     cfg: LEVEL_CONFIGS['cadet']      },
-      { key:'scout' as DifficultyLevel,     cfg: LEVEL_CONFIGS['scout']      },
-      { key:'ranger' as DifficultyLevel,    cfg: LEVEL_CONFIGS['ranger']     },
-      { key:'warlord' as DifficultyLevel,   cfg: LEVEL_CONFIGS['warlord']    },
-      { key:'phantom' as DifficultyLevel,   cfg: LEVEL_CONFIGS['phantom']    },
-      { key:'alien-mind' as DifficultyLevel,cfg: LEVEL_CONFIGS['alien-mind'] },
-    ];
-    return (
-      <div style={{ minHeight:'100vh', background:C.bg, padding:'24px 16px' }} className="fade-in">
-        <button onClick={() => setScreen('home')} style={{ background:'none', border:'none',
-          color:C.muted, fontFamily:'monospace', fontSize:13, cursor:'pointer', marginBottom:20 }}>
-          ← BACK
-        </button>
-        <div style={{ fontFamily:'monospace', fontSize:18, fontWeight:900,
-          color:C.green, letterSpacing:'0.1em', marginBottom:6 }}>SELECT MISSION</div>
-        <div style={{ color:C.muted, fontSize:11, fontFamily:'monospace', marginBottom:20 }}>
-          Faster solves = higher time multiplier = more points
+      {/* Level selector */}
+      <div>
+        <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-[0.35em] uppercase px-1 mb-3">
+          // SELECT THREAT LEVEL
         </div>
-        <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-          {diffs.map(({ key, cfg }) => (
-            <button key={key} onClick={() => startGame(key)} disabled={starting}
-              style={{ padding:'16px 18px', borderRadius:14, background:C.surface,
-                border:`1px solid ${cfg.color}28`, cursor: starting ? 'not-allowed' : 'pointer',
-                textAlign:'left', display:'flex', alignItems:'center', gap:14, opacity: starting ? 0.6 : 1 }}>
-              <span style={{ fontSize:32 }}>{cfg.emoji}</span>
-              <div style={{ flex:1 }}>
-                <div style={{ color:cfg.color, fontWeight:900, fontSize:15,
-                  fontFamily:'monospace', letterSpacing:'0.06em' }}>{cfg.label}</div>
-                <div style={{ color:C.muted, fontSize:11, fontFamily:'monospace', marginTop:2 }}>
-                  {cfg.description}
-                </div>
-              </div>
-              <div style={{ textAlign:'right', flexShrink:0 }}>
-                <div style={{ color:C.gold, fontSize:12, fontFamily:'monospace', fontWeight:700 }}>
-                  {cfg.baseScore.toLocaleString()} base
-                </div>
-                <div style={{ color:C.muted, fontSize:10, fontFamily:'monospace', marginTop:2 }}>
-                  {cfg.hintAllowance} hints
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-        {error && (
-          <div style={{ marginTop:16, padding:14, background:'rgba(255,77,109,0.08)',
-            border:'1px solid rgba(255,77,109,0.25)', borderRadius:12,
-            color:C.red, fontFamily:'monospace', fontSize:13, textAlign:'center' }}>
-            {error}
-            <button onClick={() => setScreen('wallet')} style={{ display:'block', width:'100%',
-              marginTop:10, padding:'10px', borderRadius:8, background:`${C.green}08`,
-              border:`1px solid ${C.green}30`, color:C.green, fontFamily:'monospace',
-              fontSize:12, cursor:'pointer', fontWeight:700 }}>
-              ⚡ GET TRIALS
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  if (screen === 'leaderboard') {
-    const podiumColor = (i:number) => ['#f5c542','#94a3b8','#b45309'][i] ?? 'transparent';
-    return (
-      <div style={{ minHeight:'100vh', background:C.bg, padding:'24px 16px' }} className="fade-in">
-        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:24 }}>
-          <button onClick={() => setScreen('home')} style={{ background:'none', border:'none',
-            color:C.muted, fontFamily:'monospace', fontSize:13, cursor:'pointer' }}>← BACK</button>
-          <span style={{ fontFamily:'monospace', fontSize:16, fontWeight:900,
-            color:C.green, letterSpacing:'0.1em' }}>🌌 GALACTIC BOARD</span>
-        </div>
-        {myRank && (
-          <div style={{ background:C.surface, border:`1px solid ${C.green}25`,
-            borderRadius:16, padding:16, marginBottom:20 }}>
-            <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace',
-              letterSpacing:'0.1em', marginBottom:10 }}>YOUR RANKING</div>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div>
-                <div style={{ fontFamily:'monospace', fontSize:36, fontWeight:900, color:C.gold }}>
-                  #{myRank.rank}
-                </div>
-                <div style={{ color:C.muted, fontSize:11, fontFamily:'monospace' }}>
-                  {myRank.games_won}W / {myRank.games_played}P
-                </div>
-              </div>
-              <div style={{ textAlign:'right' }}>
-                <div style={{ fontSize:36 }}>{getOverallRank(myRank.total_points).emoji}</div>
-                <div style={{ color:C.green, fontSize:11, fontFamily:'monospace' }}>
-                  {getOverallRank(myRank.total_points).name}
-                </div>
-                <div style={{ color:C.gold, fontSize:16, fontWeight:900, fontFamily:'monospace' }}>
-                  {myRank.total_points.toLocaleString()} pts
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-        <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
-          {leaderboard.map((entry, i) => {
-            const r = getOverallRank(entry.total_points);
-            const pc = podiumColor(i);
+        <div className="space-y-2">
+          {levels.map((lvl) => {
+            const cfg = LEVEL_CONFIGS[lvl];
             return (
-              <div key={entry.alien_id} style={{ display:'flex', alignItems:'center', gap:12,
-                padding:'12px 14px', borderRadius:12, background:C.surface,
-                border:`1px solid ${i<3?pc+'35':'rgba(255,255,255,0.04)'}`,
-                boxShadow: i<3 ? `0 0 20px ${pc}12` : 'none' }}>
-                <div style={{ fontFamily:'monospace', fontSize:14, fontWeight:900,
-                  color:i<3?pc:C.muted, width:28, textAlign:'center' }}>
-                  {i===0?'🥇':i===1?'🥈':i===2?'🥉':`#${entry.rank}`}
+              <button
+                key={lvl}
+                onClick={() => setSelectedLevel(lvl)}
+                className={`w-full hud-card p-3 flex items-center justify-between transition-all duration-200 ${
+                  selectedLevel === lvl ? "border-glow !border-[var(--alien-border-glow)]" : "opacity-60 hover:opacity-90"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-1.5 h-6 rounded-full ${selectedLevel === lvl ? "alien-pulse" : "opacity-30"}`}
+                    style={{ background: selectedLevel === lvl ? cfg.color : "var(--alien-text-muted)", boxShadow: selectedLevel === lvl ? `0 0 8px ${cfg.color}` : "none" }}
+                  />
+                  <span style={{ fontFamily: "var(--font-display)" }} className={`text-sm uppercase tracking-widest ${selectedLevel === lvl ? "text-[var(--alien-plasma)] glow-plasma" : "text-[var(--alien-text-dim)]"}`}>
+                    {cfg.label.toUpperCase()}
+                  </span>
                 </div>
-                <div style={{ fontSize:22 }}>{r.emoji}</div>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontFamily:'monospace', fontSize:12, color:C.text,
-                    overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                    {sanitize(entry.alien_id)}
-                  </div>
-                  <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace' }}>
-                    {r.name} · {entry.games_won}W / {entry.games_played}P
-                  </div>
-                </div>
-                <div style={{ fontFamily:'monospace', fontSize:14, fontWeight:700,
-                  color:C.gold, flexShrink:0 }}>
-                  {entry.total_points.toLocaleString()}
-                </div>
-              </div>
+                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[10px]">
+                  {cfg.size}×{cfg.size} · {cfg.description.split(" · ").slice(-1)}
+                </span>
+              </button>
             );
           })}
         </div>
       </div>
-    );
-  }
 
-  if (screen === 'profile') {
-    const nb = getNoviceBadge(wallet.novice_points);
-    const sb = getSoldierBadge(wallet.soldier_points);
-    const eb = getExpertBadge(wallet.expert_points);
-    const winRate = wallet.games_played > 0
-      ? Math.round((wallet.games_won / wallet.games_played) * 100) : 0;
-    const progressPct = nextRank
-      ? Math.min(100, ((wallet.total_points - rank.min) / (nextRank.min - rank.min)) * 100) : 100;
-    const tiers = [
-      { label:'NOVICE',  badge:nb, pts:wallet.novice_points,  all:NOVICE_BADGES,  color:C.green },
-      { label:'SOLDIER', badge:sb, pts:wallet.soldier_points, all:SOLDIER_BADGES, color:C.gold  },
-      { label:'EXPERT',  badge:eb, pts:wallet.expert_points,  all:EXPERT_BADGES,  color:C.red   },
-    ];
-    return (
-      <div style={{ minHeight:'100vh', background:C.bg, padding:'24px 16px' }} className="fade-in">
-        <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:20 }}>
-          <button onClick={() => setScreen('home')} style={{ background:'none', border:'none',
-            color:C.muted, fontFamily:'monospace', fontSize:13, cursor:'pointer' }}>← BACK</button>
-          <span style={{ fontFamily:'monospace', fontSize:15, fontWeight:900,
-            color:C.green, letterSpacing:'0.1em' }}>👤 PROFILE</span>
-        </div>
-        <div style={{ background:C.surface, border:`1px solid ${C.green}18`,
-          borderRadius:20, padding:24, textAlign:'center', marginBottom:16 }}>
-          <div style={{ fontSize:64, marginBottom:8 }} className="float">{rank.emoji}</div>
-          <div style={{ fontFamily:'monospace', fontSize:18, fontWeight:900,
-            color:C.green, letterSpacing:'0.1em' }} className="glow">{rank.name}</div>
-          <div style={{ fontFamily:'monospace', fontSize:42, fontWeight:900,
-            color:C.gold, margin:'8px 0' }}>{wallet.total_points.toLocaleString()}</div>
-          <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace',
-            letterSpacing:'0.1em', marginBottom:16 }}>TOTAL POINTS</div>
-          {nextRank && (
-            <div style={{ background:`${C.green}06`, borderRadius:10, padding:12, marginBottom:16 }}>
-              <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace', marginBottom:6 }}>
-                NEXT: {nextRank.emoji} {nextRank.name}
-              </div>
-              <div style={{ background:C.surface2, borderRadius:6, height:6, overflow:'hidden' }}>
-                <div style={{ height:'100%', borderRadius:6,
-                  background:`linear-gradient(90deg,${C.green},#00b4ff)`,
-                  width:`${progressPct}%`, transition:'width 0.6s ease' }} />
-              </div>
-              <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace', marginTop:6 }}>
-                {(nextRank.min - wallet.total_points).toLocaleString()} pts to go
-              </div>
-            </div>
-          )}
-          <div style={{ display:'flex', justifyContent:'space-around',
-            paddingTop:14, borderTop:`1px solid rgba(255,255,255,0.05)` }}>
-            {[
-              { v:wallet.games_won,   l:'WINS'        },
-              { v:wallet.games_played,l:'PLAYED'      },
-              { v:`${winRate}%`,      l:'WIN RATE'    },
-              { v:wallet.best_streak, l:'BEST STREAK' },
-            ].map(s => (
-              <div key={s.l} style={{ textAlign:'center' }}>
-                <div style={{ fontFamily:'monospace', fontSize:18, fontWeight:900, color:C.text }}>{s.v}</div>
-                <div style={{ fontSize:9, color:C.muted, fontFamily:'monospace',
-                  letterSpacing:'0.06em', marginTop:3 }}>{s.l}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-        {tiers.map(t => (
-          <div key={t.label} style={{ background:C.surface, border:`1px solid ${t.color}15`,
-            borderRadius:16, padding:16, marginBottom:12 }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-              <div>
-                <div style={{ fontFamily:'monospace', fontSize:11, color:t.color,
-                  fontWeight:700, letterSpacing:'0.08em' }}>{t.label}</div>
-                <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace', marginTop:2 }}>
-                  {t.pts.toLocaleString()} pts
-                </div>
-              </div>
-              <div style={{ textAlign:'right' }}>
-                <span style={{ fontSize:26 }}>{t.badge.emoji}</span>
-                <div style={{ fontSize:11, color:t.color, fontFamily:'monospace' }}>{t.badge.name}</div>
-              </div>
-            </div>
-            <div style={{ display:'flex', gap:6 }}>
-              {t.all.map(tier => {
-                const earned = t.pts >= tier.min;
-                return (
-                  <div key={tier.id} style={{ flex:1, textAlign:'center', padding:'7px 4px',
-                    borderRadius:8, background:earned ? `${t.color}10` : C.surface2,
-                    border:`1px solid ${earned ? t.color+'30' : 'rgba(255,255,255,0.03)'}` }}>
-                    <div style={{ fontSize:16, filter:earned?'none':'grayscale(1) opacity(0.2)' }}>
-                      {tier.emoji}
-                    </div>
-                    <div style={{ fontSize:8, color:earned?t.color:C.muted,
-                      fontFamily:'monospace', marginTop:2 }}>{tier.name}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  // HOME
-  return (
-    <div style={{ minHeight:'100vh', background:C.bg, display:'flex',
-      flexDirection:'column', padding:'28px 16px 24px' }} className="fade-in">
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:24 }}>
-        <div>
-          <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace',
-            letterSpacing:'0.1em', marginBottom:4 }}>{rank.emoji} {rank.name}</div>
-          <div style={{ fontFamily:'monospace', fontSize:28, fontWeight:900,
-            color:C.green, letterSpacing:'0.15em', lineHeight:1 }} className="glow">
-            CONGRUENCE
-          </div>
-          <div style={{ fontSize:10, color:C.muted, fontFamily:'monospace', marginTop:4 }}>
-            Latin Square · Digit Sum Logic Puzzle
-          </div>
-        </div>
-        <button onClick={() => setScreen('profile')}
-          style={{ background:C.surface, border:`1px solid ${C.green}15`,
-            borderRadius:12, padding:'8px 12px', cursor:'pointer',
-            display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
-          <span style={{ fontSize:22 }}>{rank.emoji}</span>
-          <span style={{ fontSize:9, color:C.green, fontFamily:'monospace' }}>PROFILE</span>
-        </button>
-      </div>
-      <div style={{ display:'flex', gap:8, marginBottom:20 }}>
-        {[
-          { val:wallet.total_points.toLocaleString(), lbl:'POINTS', color:C.gold      },
-          { val:wallet.games_won,                     lbl:'WINS',   color:C.green     },
-          { val:wallet.current_streak,                lbl:'STREAK', color:'#f97316'   },
-          { val:wallet.trials,                        lbl:'TRIALS', color:'#3b82f6'   },
-        ].map(s => (
-          <div key={s.lbl} style={{ flex:1, background:C.surface,
-            border:`1px solid rgba(255,255,255,0.04)`, borderRadius:12,
-            padding:'12px 6px', textAlign:'center' }}>
-            <div style={{ fontFamily:'monospace', fontSize:18, fontWeight:900, color:s.color }}>
-              {s.val}
-            </div>
-            <div style={{ fontSize:8, color:C.muted, fontFamily:'monospace',
-              letterSpacing:'0.06em', marginTop:3 }}>{s.lbl}</div>
-          </div>
-        ))}
-      </div>
-      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'8px 0' }}>
-        <div style={{ fontSize:80 }} className="float">🛸</div>
-      </div>
-      <button onClick={() => { setError(null); setScreen('levels'); }}
-        style={{ width:'100%', padding:20, borderRadius:16, border:'none',
-          background:`linear-gradient(135deg,${C.green},#00b4ff)`,
-          color:C.bg, fontSize:18, fontWeight:900, fontFamily:'monospace',
-          cursor:'pointer', letterSpacing:'0.1em', marginBottom:10,
-          boxShadow:`0 0 40px ${C.green}18` }}>
-        ▶ LAUNCH MISSION
+      {/* Launch button */}
+      <button
+        onClick={startGame}
+        disabled={!wallet || wallet.trials <= 0 || isStarting}
+        className="w-full relative overflow-hidden py-4 rounded-lg font-black uppercase transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.98]"
+        style={{
+          fontFamily: "var(--font-display)",
+          letterSpacing: "0.25em",
+          fontSize: "13px",
+          background: "linear-gradient(135deg, #001a3d 0%, #003a8c 50%, #001a3d 100%)",
+          border: "1px solid var(--alien-plasma)",
+          color: "var(--alien-plasma)",
+          boxShadow: "0 0 20px var(--alien-plasma-dim), inset 0 0 20px #00f0ff10",
+        }}
+      >
+        <span className="shimmer absolute inset-0 pointer-events-none" />
+        <span className="relative z-10">
+          {isStarting ? "⚡ INITIATING..." : `⬡ LAUNCH MISSION · ${wallet?.trials ?? 0} TRIALS`}
+        </span>
       </button>
-      <div style={{ display:'flex', gap:10 }}>
-        <button onClick={() => setScreen('wallet')}
-          style={{ flex:1, padding:14, borderRadius:12,
-            border:`1px solid ${C.green}22`, background:`${C.green}06`,
-            color:C.green, fontSize:12, fontFamily:'monospace', cursor:'pointer', fontWeight:700 }}>
-          ⚡ GET TRIALS
-        </button>
-        <button onClick={() => { fetchLeaderboard(); setScreen('leaderboard'); }}
-          style={{ flex:1, padding:14, borderRadius:12,
-            border:`1px solid ${C.gold}22`, background:`${C.gold}06`,
-            color:C.gold, fontSize:12, fontFamily:'monospace', cursor:'pointer', fontWeight:700 }}>
-          🌌 LEADERBOARD
-        </button>
+
+      {/* Trial bar */}
+      <div className="flex items-center justify-center gap-2">
+        <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-widest uppercase">
+          TRIAL CREDITS
+        </span>
+        <div className="flex gap-0.5 items-end">
+          {Array.from({ length: Math.min(wallet?.trials ?? 0, 10) }).map((_, i) => (
+            <div
+              key={i}
+              className="w-1.5 h-3 bg-[var(--alien-plasma)] rounded-sm alien-pulse"
+              style={{
+                animationDelay: `${i * 0.12}s`,
+                opacity: 0.85,
+                boxShadow: "0 0 4px var(--alien-plasma)",
+              }}
+            />
+          ))}
+          {(wallet?.trials ?? 0) > 10 && (
+            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-plasma)] text-xs ml-1">
+              +{(wallet?.trials ?? 0) - 10}
+            </span>
+          )}
+        </div>
       </div>
+
+      {/* Leaderboard */}
+      {leaderboard.length > 0 && (
+        <div className="hud-card overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-[var(--alien-border)] flex items-center gap-2">
+            <span className="text-[var(--alien-plasma)] text-sm">◉</span>
+            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-dim)] text-[9px] tracking-[0.25em] uppercase">
+              GLOBAL INTEL RANKINGS
+            </span>
+          </div>
+          {leaderboard.slice(0, 10).map((entry, i) => (
+            <div
+              key={entry.alien_id}
+              className={`px-4 py-2.5 flex items-center gap-3 border-b border-[var(--alien-border)] last:border-0 transition-colors ${entry.alien_id === myAlienId ? "bg-[#00f0ff06]" : ""}`}
+            >
+              <span
+                style={{ fontFamily: "var(--font-mono)" }}
+                className={`text-xs w-5 text-right tabular-nums shrink-0 ${i === 0 ? "text-[var(--alien-gold)] glow-gold" : i === 1 ? "text-[var(--alien-text-dim)]" : "text-[var(--alien-text-muted)]"}`}
+              >
+                {i === 0 ? "▲" : i + 1}
+              </span>
+              <span style={{ fontFamily: "var(--font-mono)" }} className="flex-1 text-xs text-[var(--alien-text-dim)] truncate">
+                {sanitize(entry.alien_id)}
+              </span>
+              <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-plasma)] text-xs glow-plasma tabular-nums shrink-0">
+                {entry.total_points.toLocaleString()}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
