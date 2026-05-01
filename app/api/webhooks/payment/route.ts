@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
-import { eq, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { getServerEnv } from "@/lib/env";
 import { WebhookPayload } from "@/features/payments/dto";
-import { db, schema } from "@/lib/db";
+import { db } from "@/lib/db";
 
 async function verifySignature(
   publicKeyHex: string,
@@ -50,18 +50,18 @@ export async function POST(request: Request) {
 
     const payload = parsed.data;
 
-    // RULE 7: Result rows are at result.rows
-    const intentResult = (await db.execute(sql`
+    const intentResult = await db.execute(sql`
       SELECT * FROM payment_intents WHERE invoice = ${payload.invoice}
-    `)) as any;
+    `);
 
-    if (intentResult.rows.length === 0) {
+    const intentRows = intentResult as unknown as any[];
+
+    if (intentRows.length === 0) {
       return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
     }
 
-    const intent = intentResult.rows[0];
+    const intent = intentRows[0];
 
-    // Idempotency guard
     if (intent.status === "completed" || intent.status === "failed") {
       return NextResponse.json({ success: true });
     }
@@ -84,7 +84,6 @@ export async function POST(request: Request) {
         )
       `);
 
-      // Credit trials to game_wallets on successful payment
       if (payload.status === "finalized") {
         const trialsMap: Record<string, number> = {
           "trials-10": 10,
