@@ -1,7 +1,7 @@
 export interface Cell {
   row: number; col: number; value: number;
   isGiven: boolean; playerValue: number;
-  notes: Set<number>; cageId: number; isInvalid: boolean;
+  notes: number[]; cageId: number; isInvalid: boolean;
 }
 
 export interface Cage {
@@ -30,12 +30,12 @@ export interface LevelConfig {
 }
 
 export const LEVEL_CONFIGS: Record<DifficultyLevel, LevelConfig> = {
-  'cadet':      { label:'Cadet',      emoji:'🪐', size:5, clueRatio:0.55, cageSizeMin:2, cageSizeMax:3, hintAllowance:5, baseScore:1000, color:'#00ffb4', description:'5×5 · 5 hints · Great for learning'   },
-  'scout':      { label:'Scout',      emoji:'⭐', size:5, clueRatio:0.45, cageSizeMin:2, cageSizeMax:4, hintAllowance:4, baseScore:1000, color:'#4ade80', description:'5×5 · 4 hints · Fewer clues'            },
-  'ranger':     { label:'Ranger',     emoji:'🌟', size:6, clueRatio:0.45, cageSizeMin:2, cageSizeMax:4, hintAllowance:3, baseScore:1200, color:'#60a5fa', description:'6×6 · 3 hints · Bigger grid'            },
-  'warlord':    { label:'Warlord',    emoji:'⚔️', size:6, clueRatio:0.35, cageSizeMin:3, cageSizeMax:5, hintAllowance:2, baseScore:1200, color:'#f5c542', description:'6×6 · 2 hints · Hard cages'            },
-  'phantom':    { label:'Phantom',    emoji:'⚡', size:8, clueRatio:0.32, cageSizeMin:3, cageSizeMax:5, hintAllowance:2, baseScore:1600, color:'#f97316', description:'8×8 · 2 hints · Expert territory'       },
-  'alien-mind': { label:'Alien Mind', emoji:'👽', size:9, clueRatio:0.28, cageSizeMin:4, cageSizeMax:6, hintAllowance:1, baseScore:1800, color:'#ff4d6d', description:'9×9 · 1 hint · Maximum complexity'      },
+  'cadet':      { label:'Cadet',      emoji:'🪐', size:5, clueRatio:0.65, cageSizeMin:2, cageSizeMax:3, hintAllowance:5, baseScore:1000, color:'#00ffb4', description:'5×5 · 5 hints · Great for learning'   },
+  'scout':      { label:'Scout',      emoji:'⭐', size:5, clueRatio:0.55, cageSizeMin:2, cageSizeMax:4, hintAllowance:4, baseScore:1000, color:'#4ade80', description:'5×5 · 4 hints · Fewer clues'            },
+  'ranger':     { label:'Ranger',     emoji:'🌟', size:6, clueRatio:0.55, cageSizeMin:2, cageSizeMax:4, hintAllowance:3, baseScore:1200, color:'#60a5fa', description:'6×6 · 3 hints · Bigger grid'            },
+  'warlord':    { label:'Warlord',    emoji:'⚔️', size:6, clueRatio:0.45, cageSizeMin:3, cageSizeMax:5, hintAllowance:2, baseScore:1200, color:'#f5c542', description:'6×6 · 2 hints · Hard cages'            },
+  'phantom':    { label:'Phantom',    emoji:'⚡', size:8, clueRatio:0.42, cageSizeMin:3, cageSizeMax:5, hintAllowance:2, baseScore:1600, color:'#f97316', description:'8×8 · 2 hints · Expert territory'       },
+  'alien-mind': { label:'Alien Mind', emoji:'👽', size:9, clueRatio:0.38, cageSizeMin:4, cageSizeMax:6, hintAllowance:1, baseScore:1800, color:'#ff4d6d', description:'9×9 · 1 hint · Maximum complexity'      },
 };
 
 const CAGE_COLORS = [
@@ -143,7 +143,7 @@ function createClues(solution: number[][], cages: Cage[], clueRatio: number): Ce
     Array.from({ length: n }, (_, c) => ({
       row: r, col: c, value: solution[r][c],
       isGiven: true, playerValue: solution[r][c],
-      notes: new Set<number>(), cageId: cageOf[r][c], isInvalid: false,
+      notes: [] as number[], cageId: cageOf[r][c], isInvalid: false,
     }))
   );
 

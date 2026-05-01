@@ -57,16 +57,16 @@ export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit
 
     setHistory(prev => [...prev.slice(-30), puzzle]);
     setPuzzle(prev => {
-      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: new Set(cell.notes) })));
+      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: [...cell.notes] })));
       if (noteMode) {
         const notes = newGrid[r][c].notes;
-        if (notes.has(num)) notes.delete(num); else notes.add(num);
+        if (notes.includes(num)) notes.splice(notes.indexOf(num), 1); else notes.push(num);
       } else {
         const rowVals = newGrid[r].map((cc, ci) => ci !== c ? cc.playerValue : 0).filter(v => v);
         const colVals = newGrid.map((rr, ri) => ri !== r ? rr[c].playerValue : 0).filter(v => v);
         if (rowVals.includes(num) || colVals.includes(num)) setErrorCount(e => e + 1);
         newGrid[r][c].playerValue = num;
-        newGrid[r][c].notes.clear();
+        newGrid[r][c].notes = [];
       }
       return { ...prev, grid: newGrid };
     });
@@ -90,9 +90,9 @@ export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit
     if (puzzle.grid[r][c].isGiven) return;
     setHistory(prev => [...prev.slice(-30), puzzle]);
     setPuzzle(prev => {
-      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: new Set(cell.notes) })));
+      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: [...cell.notes] })));
       newGrid[r][c].playerValue = 0;
-      newGrid[r][c].notes.clear();
+      newGrid[r][c].notes = [];
       return { ...prev, grid: newGrid };
     });
   }, [selected, puzzle, solved]);
@@ -112,9 +112,9 @@ export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit
     setHistory(prev => [...prev.slice(-30), puzzle]);
     setHintsUsed(h => h + 1);
     setPuzzle(prev => {
-      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: new Set(cell.notes) })));
+      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: [...cell.notes] })));
       newGrid[hint.row][hint.col].playerValue = hint.value;
-      newGrid[hint.row][hint.col].notes.clear();
+      newGrid[hint.row][hint.col].notes = [];
       return { ...prev, grid: newGrid };
     });
     setSelected([hint.row, hint.col]);
@@ -205,18 +205,18 @@ export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit
                 </div>
               )}
               {/* Notes */}
-              {!cell.isGiven && cell.playerValue === 0 && cell.notes.size > 0 && (
+              {!cell.isGiven && cell.playerValue === 0 && cell.notes.length > 0 && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)',
                   gap: 1, padding: 2, width: '100%', height: '100%' }}>
                   {Array.from({ length: n }, (_, i) => i + 1).map(num => (
                     <div key={num} style={{ fontSize: 7,
-                      color: cell.notes.has(num) ? dc : 'transparent',
+                      color: cell.notes.includes(num) ? dc : 'transparent',
                       fontFamily: 'monospace', textAlign: 'center' }}>{num}</div>
                   ))}
                 </div>
               )}
               {/* Cell value */}
-              {(cell.isGiven || cell.playerValue !== 0) && cell.notes.size === 0 && (
+              {(cell.isGiven || cell.playerValue !== 0) && cell.notes.length === 0 && (
                 <span style={{ fontSize: n >= 8 ? 14 : 18, fontWeight: 900,
                   fontFamily: 'monospace',
                   color: isError ? '#ff4d6d' : cell.isGiven ? dc : '#e2e8f0' }}>
