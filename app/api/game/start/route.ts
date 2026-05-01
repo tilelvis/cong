@@ -21,7 +21,12 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
 
     const { level } = parsed.data;
-
+    // Ensure user exists before touching game_wallets
+    await db.execute(sql`
+      INSERT INTO users (alien_id)
+      VALUES (${sub})
+      ON CONFLICT (alien_id) DO NOTHING
+    `);
     const result = (await db.execute(sql`
       UPDATE game_wallets SET
         trials        = trials - 1,
