@@ -25,21 +25,24 @@ export async function POST(request: NextRequest) {
 
     const { sessionId, timeTakenMs, hintsUsed, errorCount } = parsed.data;
 
-    const sessionResult = (await db.execute(sql`
+    const sessionResult = await db.execute(sql`
       SELECT id, alien_id, level, status FROM game_sessions
       WHERE id = ${sessionId} AND alien_id = ${sub} AND status = 'active'
-    `)) as any;
+    `);
 
-    if (sessionResult.rows.length === 0) {
+    const sessionRows = sessionResult as unknown as any[];
+
+    if (sessionRows.length === 0) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     }
 
-    const session = sessionResult.rows[0] as GameSessionRow;
+    const session = sessionRows[0] as GameSessionRow;
 
-    const walletResult = (await db.execute(sql`
+    const walletResult = await db.execute(sql`
       SELECT current_streak FROM game_wallets WHERE alien_id = ${sub}
-    `)) as any;
-    const currentStreak = Number(walletResult.rows[0]?.current_streak ?? 0);
+    `);
+    const walletRows = walletResult as unknown as any[];
+    const currentStreak = Number(walletRows[0]?.current_streak ?? 0);
 
     const elapsedSeconds = Math.floor(timeTakenMs / 1000);
     const score = calculateScore(session.level as DifficultyLevel, elapsedSeconds, hintsUsed, errorCount, currentStreak);
