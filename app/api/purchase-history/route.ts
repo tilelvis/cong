@@ -20,8 +20,7 @@ export async function GET(request: Request) {
 
     const { sub } = await verifyToken(token);
 
-    // RULE 7: Result rows are at result.rows
-    const result = (await db.execute(sql`
+    const result = await db.execute(sql`
       SELECT
         t.invoice,
         t.amount,
@@ -34,9 +33,11 @@ export async function GET(request: Request) {
       WHERE t.sender_alien_id = ${sub}
       ORDER BY t.created_at DESC
       LIMIT 30
-    `)) as any;
+    `);
 
-    const rows = result.rows.map((row: any) => ({
+    const resultRows = result as unknown as any[];
+
+    const rows = resultRows.map((row) => ({
       invoice:         row.invoice,
       amount:          row.amount,
       token:           row.token,
