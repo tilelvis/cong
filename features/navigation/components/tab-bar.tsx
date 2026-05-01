@@ -1,64 +1,71 @@
 "use client";
 
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { House, Compass, User, Gem, type LucideIcon } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 
-export interface TabItem {
-  label: string;
-  href: string;
-  icon: LucideIcon;
-}
-
-const DEFAULT_TABS: TabItem[] = [
-  { label: "Home", href: "/", icon: House },
-  { label: "Store", href: "/store", icon: Gem },
-  { label: "Explore", href: "/explore", icon: Compass },
-  { label: "Profile", href: "/profile", icon: User },
+const tabs = [
+  { href: "/", icon: "⬡", label: "BASE" },
+  { href: "/store", icon: "◈", label: "DEPOT" },
+  { href: "/profile", icon: "◉", label: "PROFILE" },
+  { href: "/history", icon: "◌", label: "INTEL" },
 ];
 
-function isActive(href: string, pathname: string) {
-  return href === "/" ? pathname === "/" : pathname.startsWith(href);
-}
-
-export function TabBar({ tabs = DEFAULT_TABS }: { tabs?: TabItem[] }) {
+export function TabBar() {
   const pathname = usePathname();
+  const router = useRouter();
 
   return (
-    <nav aria-label="Main navigation" className="fixed inset-x-0 bottom-0 z-50">
-      <div className="border-t border-zinc-200/80 bg-white/80 pb-safe-bottom pl-safe-left pr-safe-right backdrop-blur-xl dark:border-zinc-800/80 dark:bg-zinc-950/80">
-        <div className="mx-auto flex max-w-md">
+    <nav className="fixed bottom-0 left-0 right-0 z-50">
+      <div className="max-w-[390px] mx-auto">
+        <div
+          className="flex items-center justify-around px-2 py-2 pb-safe-bottom"
+          style={{
+            background: "rgba(2, 4, 9, 0.95)",
+            backdropFilter: "blur(20px)",
+            WebkitBackdropFilter: "blur(20px)",
+            borderTop: "1px solid var(--alien-border)",
+            boxShadow: "0 -1px 0 var(--alien-border-glow), 0 -8px 30px #00f0ff08",
+          }}
+        >
           {tabs.map((tab) => {
-            const active = isActive(tab.href, pathname);
-            const Icon = tab.icon;
-
+            const isActive = pathname === tab.href;
             return (
-              <Link
+              <button
                 key={tab.href}
-                href={tab.href}
-                aria-current={active ? "page" : undefined}
-                className={`relative flex flex-1 flex-col items-center gap-0.5 pb-2 pt-2.5 transition-colors duration-150 ${
-                  active
-                    ? "text-zinc-900 dark:text-zinc-100"
-                    : "text-zinc-400 active:text-zinc-600 dark:text-zinc-500 dark:active:text-zinc-300"
-                }`}
+                onClick={() => router.push(tab.href)}
+                className="flex flex-col items-center gap-1 px-5 py-1.5 group transition-all duration-200 relative"
               >
                 <span
-                  className={`absolute top-0 h-[2px] w-6 rounded-full transition-all duration-200 ${
-                    active
-                      ? "scale-x-100 bg-zinc-900 dark:bg-zinc-100"
-                      : "scale-x-0 bg-transparent"
-                  }`}
-                />
-                <Icon size={22} strokeWidth={active ? 2 : 1.5} />
+                  className="text-xl transition-all duration-200"
+                  style={{
+                    color: isActive ? "var(--alien-plasma)" : "var(--alien-text-muted)",
+                    filter: isActive ? "drop-shadow(0 0 8px var(--alien-plasma))" : "none",
+                    fontSize: "18px",
+                  }}
+                >
+                  {tab.icon}
+                </span>
                 <span
-                  className={`text-[10px] leading-tight tracking-wide ${
-                    active ? "font-semibold" : "font-medium"
-                  }`}
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    letterSpacing: "0.12em",
+                    fontSize: "8px",
+                    color: isActive ? "var(--alien-plasma)" : "var(--alien-text-muted)",
+                    textShadow: isActive ? "0 0 8px var(--alien-plasma)" : "none",
+                  }}
+                  className="uppercase transition-all duration-200"
                 >
                   {tab.label}
                 </span>
-              </Link>
+                {isActive && (
+                  <div
+                    className="w-1 h-1 rounded-full alien-pulse absolute -bottom-0.5"
+                    style={{
+                      background: "var(--alien-plasma)",
+                      boxShadow: "0 0 6px var(--alien-plasma)",
+                    }}
+                  />
+                )}
+              </button>
             );
           })}
         </div>

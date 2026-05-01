@@ -1,98 +1,83 @@
-'use client';
+"use client";
 
-import { useAlien, usePayment } from '@alien_org/react';
-import { useState, useCallback, useEffect, useRef } from 'react';
-import { DEPOSIT_PACKS, type DepositPack } from '@/lib/deposit-packs';
+import { useState, useCallback, useRef, useEffect } from "react";
+import { useAlien, usePayment } from "@alien_org/react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import toast from "react-hot-toast";
 
-interface PurchaseRecord {
-  invoice: string;
-  amount: string | null;
-  token: string | null;
-  status: string;
-  created_at: string;
-  product_id: string | null;
-  trials_credited: number | null;
-}
+// ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Props {
+interface DepositPack {
+  id: string;
+  name: string;
   trials: number;
-  onClose: () => void;
-  onTrialsUpdated: () => Promise<void>;
+  price: string;
+  amount: string;
+  token: string;
+  network: string;
 }
 
-const TRIALS_LABEL: Record<string, string> = {
-  'trials-10': '10 Trials',
-  'trials-25': '27 Trials',
-  'trials-50': '60 Trials',
-  'trials-100': '130 Trials',
-};
+// ── GameWallet ─────────────────────────────────────────────────────────────────
 
-export function GameWallet({ trials, onClose, onTrialsUpdated }: Props) {
-  const { authToken } = useAlien();
-  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
-  const [buying, setBuying] = useState<string | null>(null);
-  const [tab, setTab] = useState<'buy' | 'history'>('buy');
-  const [history, setHistory] = useState<PurchaseRecord[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState(false);
+export function GameWallet() {
+  const { authToken, isBridgeAvailable } = useAlien();
+  const queryClient = useQueryClient();
+  const activePack = useRef<DepositPack | null>(null);
+  const [polling, setPolling] = useState(false);
 
-  // Ref so polling closure always has the latest callback
-  const onTrialsUpdatedRef = useRef(onTrialsUpdated);
-  useEffect(() => { onTrialsUpdatedRef.current = onTrialsUpdated; }, [onTrialsUpdated]);
-
-  const fetchHistory = useCallback(async () => {
-    if (!authToken) return;
-    setLoadingHistory(true);
-    try {
-      const res = await fetch('/api/purchase-history', {
-        headers: { Authorization: `Bearer ${authToken}` },
-      });
-      if (res.ok) setHistory(await res.json());
-    } catch (err) {
-      console.error('Failed to fetch history:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  }, [authToken]);
-
-  useEffect(() => {
-    if (tab === 'history') fetchHistory();
-  }, [tab, fetchHistory]);
-
-  const { pay } = usePayment({
-    onPaid: () => {
-      setStatus({ text: '✅ Payment confirmed! Crediting trials...', ok: true });
-      let attempts = 0;
-      const poll = setInterval(async () => {
-        attempts++;
-        await onTrialsUpdatedRef.current();
-        if (attempts >= 15) {
-          clearInterval(poll);
-          setStatus({ text: '✅ Trials credited!', ok: true });
-          fetchHistory();
-        }
-      }, 2000);
+  const { data: packs, isLoading: packsLoading } = useQuery<DepositPack[]>({
+    queryKey: ["deposit-packs"],
+    queryFn: async () => {
+      const res = await fetch("/api/game-wallet", { headers: { Authorization: `Bearer ${authToken!}` } });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
     },
-    onCancelled: () => setStatus({ text: 'Payment cancelled.', ok: false }),
-    onFailed: (code: string) => setStatus({ text: `Payment failed: ${code}`, ok: false }),
+    enabled: !!authToken,
   });
 
-  const handleBuy = useCallback(async (pack: DepositPack) => {
-    if (!authToken || buying) return;
-    setBuying(pack.id);
-    setStatus(null);
+  const { data: history, isLoading: historyLoading } = useQuery({
+    queryKey: ["purchase-history"],
+    queryFn: async () => {
+      const res = await fetch("/api/purchase-history", { headers: { Authorization: `Bearer ${authToken!}` } });
+      if (!res.ok) throw new Error("Failed");
+      return res.json();
+    },
+    enabled: !!authToken,
+  });
+
+  const onPaid = useCallback(() => {
+    const pack = activePack.current;
+    if (pack) toast.success(`+${pack.trials} trials credited`, { icon: "⬡" });
+    queryClient.invalidateQueries({ queryKey: ["wallet"] });
+    queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
+  }, [queryClient]);
+
+  const onCancelled = useCallback(() => {
+    toast("Mission payment cancelled", { icon: "✕" });
+  }, []);
+
+  const onFailed = useCallback(() => {
+    toast.error("Payment failed. Try again.");
+  }, []);
+
+  const { pay, isLoading: payLoading } = usePayment({ onPaid, onCancelled, onFailed });
+
+  const handleBuy = async (pack: DepositPack) => {
+    if (!authToken) return;
+    activePack.current = pack;
+
     try {
-      const res = await fetch('/api/invoices', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+      const res = await fetch("/api/invoices", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ productId: pack.id }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        setStatus({ text: `Failed: ${err.error ?? res.status}`, ok: false });
+        toast.error(err.error ?? "Failed to initiate payment");
         return;
       }
       const data = await res.json();
-      // RULE 5: pay() is NOT async
       pay({
         recipient: data.recipient,
         amount: data.amount,
@@ -102,115 +87,155 @@ export function GameWallet({ trials, onClose, onTrialsUpdated }: Props) {
         item: data.item,
         ...(data.test ? { test: data.test } : {}),
       });
-    } catch (err) {
-      console.error('Payment error:', err);
-      setStatus({ text: 'An error occurred. Please try again.', ok: false });
-    } finally {
-      setBuying(null);
+    } catch {
+      toast.error("Connection failure.");
     }
-  }, [authToken, buying, pay]);
+  };
+
+  const packIcons = (trials: number) => {
+    if (trials <= 10) return "◈";
+    if (trials <= 27) return "◈◈";
+    if (trials <= 60) return "◈◈◈";
+    return "◈◈◈◈";
+  };
 
   return (
-    <div style={S.overlay}>
-      <div style={S.sheet}>
-        <div style={S.header}>
-          <span style={S.title}>⚡ GET TRIALS</span>
-          <button onClick={onClose} style={S.closeBtn}>✕</button>
+    <div className="px-4 py-6 pb-28 space-y-5">
+      {/* Header */}
+      <div className="text-center">
+        <div style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-plasma)] text-xl font-black uppercase tracking-[0.2em] glow-plasma">
+          ◈ TRIAL DEPOT
         </div>
-        <div style={S.balance}>
-          <span style={S.balanceNum}>{trials}</span>
-          <span style={S.balanceLabel}> trials remaining</span>
+        <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[10px] tracking-[0.25em] mt-1 uppercase">
+          PURCHASE MISSION CREDITS
         </div>
-        <div style={S.tabs}>
-          {(['buy', 'history'] as const).map(t => (
-            <button key={t} onClick={() => setTab(t)} style={{
-              ...S.tab,
-              color: tab === t ? '#00ffb4' : '#444',
-              borderBottom: tab === t ? '2px solid #00ffb4' : '2px solid transparent',
-            }}>{t.toUpperCase()}</button>
-          ))}
-        </div>
+      </div>
 
-        {tab === 'buy' && (
-          <>
-            <p style={S.subtitle}>1 ALIEN = 1 trial. Larger packs include bonus trials.</p>
-            <div style={S.grid}>
-              {DEPOSIT_PACKS.map(pack => (
-                <button key={pack.id} onClick={() => handleBuy(pack)} disabled={!!buying}
-                  style={{ ...S.packBtn, opacity: buying && buying !== pack.id ? 0.4 : 1,
-                    borderColor: pack.bonus ? 'rgba(0,255,136,0.4)' : 'rgba(255,255,255,0.08)' }}>
-                  {buying === pack.id ? (
-                    <span style={{ color: '#888', fontSize: 12 }}>Processing...</span>
-                  ) : (
-                    <>
-                      <div style={S.packTrials}>{pack.trials} Trials</div>
-                      <div style={S.packPrice}>{Number(pack.amount) / 1e9} ALIEN</div>
-                      {pack.bonus && <div style={S.packBonus}>{pack.bonus}</div>}
-                    </>
-                  )}
-                </button>
+      {/* Bridge warning */}
+      {!isBridgeAvailable && (
+        <div className="hud-card p-4 border-[var(--alien-warning)] flex items-start gap-3" style={{ borderColor: "var(--alien-warning)" }}>
+          <span className="text-[var(--alien-warning)] text-lg shrink-0">⚠</span>
+          <div>
+            <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-warning)] text-xs uppercase tracking-widest mb-1">BRIDGE OFFLINE</div>
+            <div style={{ fontFamily: "var(--font-body)" }} className="text-[var(--alien-text-dim)] text-sm">Open inside the Alien app to enable payments.</div>
+          </div>
+        </div>
+      )}
+
+      {/* Packs */}
+      <div>
+        <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-[0.35em] uppercase mb-3">
+          // SELECT TRIAL PACK
+        </div>
+        <div className="space-y-2">
+          {packsLoading ? (
+            [1, 2, 3, 4].map((i) => (
+              <div key={i} className="hud-card p-4 h-16 animate-pulse" />
+            ))
+          ) : (
+            (packs ?? []).map((pack) => (
+              <button
+                key={pack.id}
+                onClick={() => handleBuy(pack)}
+                disabled={payLoading || !isBridgeAvailable || !authToken}
+                className="w-full hud-card p-4 flex items-center gap-4 hover:border-[var(--alien-border-glow)] hover:bg-[#00f0ff06] transition-all duration-200 group disabled:opacity-40 disabled:cursor-not-allowed active:scale-[0.99]"
+              >
+                <div
+                  style={{
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--alien-plasma)",
+                    fontSize: "20px",
+                    filter: "drop-shadow(0 0 8px var(--alien-plasma))",
+                    minWidth: "40px",
+                    textAlign: "center",
+                  }}
+                >
+                  {packIcons(pack.trials)}
+                </div>
+                <div className="flex-1 text-left">
+                  <div
+                    style={{ fontFamily: "var(--font-display)", fontSize: "13px" }}
+                    className="text-[var(--alien-text)] uppercase tracking-widest group-hover:text-[var(--alien-plasma)] group-hover:glow-plasma transition-all duration-200"
+                  >
+                    {pack.trials} TRIALS
+                  </div>
+                  <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-xs mt-0.5">
+                    {pack.name} · {pack.token}
+                  </div>
+                </div>
+                <div style={{ fontFamily: "var(--font-display)", color: "var(--alien-energy)" }} className="text-sm font-bold glow-energy shrink-0">
+                  {pack.price}
+                </div>
+              </button>
+            ))
+          )}
+        </div>
+      </div>
+
+      {payLoading && (
+        <div className="hud-card p-3 flex items-center gap-3">
+          <div className="w-2 h-2 rounded-full bg-[var(--alien-plasma)] alien-pulse" style={{ boxShadow: "0 0 6px var(--alien-plasma)" }} />
+          <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-plasma)] text-xs tracking-widest uppercase">
+            PROCESSING PAYMENT...
+          </span>
+        </div>
+      )}
+
+      {/* Purchase history */}
+      {authToken && (
+        <div className="hud-card overflow-hidden">
+          <div className="px-4 py-2.5 border-b border-[var(--alien-border)] flex items-center gap-2">
+            <span className="text-[var(--alien-plasma)] text-sm">◌</span>
+            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-dim)] text-[9px] tracking-[0.25em] uppercase">
+              ACQUISITION LOG
+            </span>
+          </div>
+
+          {historyLoading ? (
+            <div className="p-4">
+              {[1, 2].map((i) => (
+                <div key={i} className="h-10 animate-pulse border-b border-[var(--alien-border)] last:border-0" />
               ))}
             </div>
-            {status && (
-              <div style={{ ...S.statusBox, color: status.ok ? '#00ffb4' : '#ef4444' }}>
-                {status.text}
-              </div>
-            )}
-          </>
-        )}
-
-        {tab === 'history' && (
-          <div style={{ marginTop: 12, maxHeight: 300, overflowY: 'auto' }}>
-            {loadingHistory ? (
-              <div style={{ textAlign: 'center', padding: 32, color: '#444', fontFamily: 'monospace', fontSize: 12 }}>Loading...</div>
-            ) : history.length === 0 ? (
-              <div style={{ textAlign: 'center', padding: 32, color: '#444', fontFamily: 'monospace', fontSize: 12 }}>No purchases yet</div>
-            ) : history.map((item, i) => (
-              <div key={i} style={S.histRow}>
-                <div>
-                  <div style={{ color: '#fff', fontSize: 13, fontFamily: 'monospace', fontWeight: 700 }}>
-                    {item.product_id ? (TRIALS_LABEL[item.product_id] ?? item.product_id)
-                      : item.amount ? `${Number(item.amount) / 1e9} ALIEN` : 'Purchase'}
+          ) : !history?.length ? (
+            <div className="px-4 py-6 text-center">
+              <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-xs uppercase tracking-widest">
+                NO TRANSACTIONS ON RECORD
+              </span>
+            </div>
+          ) : (
+            (history as Array<{ invoice: string; amount: string; token: string; status: string; created_at: string; trials_credited: number | null }>).map((item) => (
+              <div key={item.invoice} className="px-4 py-2.5 flex items-center gap-3 border-b border-[var(--alien-border)] last:border-0">
+                <div
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                  style={{
+                    background: item.status === "paid" ? "var(--alien-energy)" : item.status === "failed" ? "var(--alien-danger)" : "var(--alien-text-muted)",
+                    boxShadow: item.status === "paid" ? "0 0 4px var(--alien-energy)" : "none",
+                  }}
+                />
+                <div className="flex-1 min-w-0">
+                  <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text)] text-xs truncate">
+                    {item.trials_credited ? `+${item.trials_credited} trials` : item.amount}
                   </div>
-                  {item.trials_credited && (
-                    <div style={{ color: '#00ffb4', fontSize: 10, fontFamily: 'monospace', marginTop: 2 }}>
-                      +{item.trials_credited} trials credited
-                    </div>
-                  )}
-                  <div style={{ color: '#444', fontSize: 10, fontFamily: 'monospace', marginTop: 2 }}>
-                    {new Date(item.created_at).toLocaleString()}
+                  <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] mt-0.5">
+                    {new Date(item.created_at).toLocaleDateString()} · {item.token}
                   </div>
                 </div>
-                <div style={{ fontSize: 11, fontFamily: 'monospace', fontWeight: 700,
-                  color: item.status === 'paid' || item.status === 'completed' ? '#00ffb4' : '#ef4444' }}>
-                  {item.status === 'paid' || item.status === 'completed' ? '✅ PAID' : item.status.toUpperCase()}
-                </div>
+                <span
+                  style={{ fontFamily: "var(--font-mono)" }}
+                  className={`text-[9px] uppercase tracking-widest shrink-0 ${
+                    item.status === "paid" ? "text-[var(--alien-energy)] glow-energy" :
+                    item.status === "failed" ? "text-[var(--alien-danger)]" :
+                    "text-[var(--alien-text-muted)]"
+                  }`}
+                >
+                  {item.status}
+                </span>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
-
-const S: Record<string, React.CSSProperties> = {
-  overlay:     { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', alignItems: 'flex-end', zIndex: 100 },
-  sheet:       { width: '100%', background: '#0a0a0f', borderRadius: '20px 20px 0 0', padding: '20px 20px 40px', maxHeight: '85vh', overflowY: 'auto' },
-  header:      { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  title:       { fontFamily: 'monospace', fontWeight: 700, fontSize: 15, color: '#00ffb4', letterSpacing: '0.1em' },
-  closeBtn:    { background: 'none', border: 'none', color: '#666', fontSize: 20, cursor: 'pointer', padding: '0 4px' },
-  balance:     { textAlign: 'center', marginBottom: 12 },
-  balanceNum:  { fontSize: 44, fontWeight: 900, fontFamily: 'monospace', color: '#00ffb4' },
-  balanceLabel:{ fontSize: 13, color: '#666', fontFamily: 'monospace' },
-  tabs:        { display: 'flex', marginBottom: 16, borderBottom: '1px solid #1a1a1a' },
-  tab:         { flex: 1, padding: '10px 0', background: 'none', border: 'none', fontSize: 12, fontFamily: 'monospace', fontWeight: 700, letterSpacing: '0.08em', cursor: 'pointer' },
-  subtitle:    { textAlign: 'center', color: '#555', fontSize: 12, fontFamily: 'monospace', marginBottom: 16 },
-  grid:        { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 12 },
-  packBtn:     { padding: '14px 10px', borderRadius: 12, background: '#111', border: '1px solid', cursor: 'pointer', textAlign: 'center', transition: 'opacity 0.15s' },
-  packTrials:  { fontSize: 16, fontWeight: 700, color: '#fff', fontFamily: 'monospace' },
-  packPrice:   { fontSize: 12, color: '#f59e0b', fontFamily: 'monospace', marginTop: 4 },
-  packBonus:   { fontSize: 10, color: '#00ffb4', fontFamily: 'monospace', marginTop: 3 },
-  statusBox:   { fontSize: 12, fontFamily: 'monospace', textAlign: 'center', padding: 12, background: '#111', borderRadius: 8 },
-  histRow:     { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 0', borderBottom: '1px solid #111' },
-};

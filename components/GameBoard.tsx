@@ -1,23 +1,42 @@
-'use client';
+"use client";
 
-import { useState, useCallback, useEffect, useRef } from 'react';
-import type { Puzzle, ValidationResult } from '@/lib/puzzle-engine';
-import { validateGrid, getHint, LEVEL_CONFIGS } from '@/lib/puzzle-engine';
+import { useState, useCallback, useEffect, useRef } from "react";
+import type { Puzzle, ValidationResult } from "@/lib/puzzle-engine";
+import { validateGrid, getHint, LEVEL_CONFIGS } from "@/lib/puzzle-engine";
 
-interface Props {
+interface GameBoardProps {
   puzzle: Puzzle;
-  hintsAllowed: number;
-  onSolve: (timeTakenMs: number, hintsUsed: number, errorCount: number) => void;
-  onQuit: () => void;
+  level: string;
+  onSolve: (params: { timeTakenMs: number; hintsUsed: number; errorCount: number }) => void;
+  onFail: () => void;
 }
 
-export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit }: Props) {
+const CAGE_COLORS = [
+  "var(--alien-plasma)",
+  "var(--alien-energy)",
+  "var(--alien-gold)",
+  "var(--alien-warning)",
+  "#cc44ff",
+  "#ff44cc",
+  "#44ccff",
+  "#88ff44",
+];
+
+function formatTime(s: number): string {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
+}
+
+export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: GameBoardProps) {
   const [puzzle, setPuzzle] = useState<Puzzle>(initialPuzzle);
   const [selected, setSelected] = useState<[number, number] | null>(null);
   const [hintsUsed, setHintsUsed] = useState(0);
   const [errorCount, setErrorCount] = useState(0);
   const [validation, setValidation] = useState<ValidationResult>({
-    isComplete: false, errors: [], cageStatuses: {}
+    isComplete: false,
+    errors: [],
+    cageStatuses: {},
   });
   const [noteMode, setNoteMode] = useState(false);
   const [history, setHistory] = useState<Puzzle[]>([]);
@@ -25,13 +44,9 @@ export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit
   const [solved, setSolved] = useState(false);
   const startTimeRef = useRef(Date.now());
 
-  const config = LEVEL_CONFIGS[puzzle.level];
-  const dc = config.color;
+  const config = LEVEL_CONFIGS[puzzle.level as keyof typeof LEVEL_CONFIGS];
   const n = puzzle.size;
-  const cellPx = n >= 8 ? 40 : n === 6 ? 52 : 62;
-  const timerColor = elapsed < 60 ? '#00ffb4' : elapsed < 180 ? '#f5c542' : '#ff4d6d';
-  const mins = String(Math.floor(elapsed / 60)).padStart(2, '0');
-  const secs = String(elapsed % 60).padStart(2, '0');
+  const hintsRemaining = (config?.hintAllowance ?? 0) - hintsUsed;
 
   // Timer
   useEffect(() => {
@@ -46,25 +61,38 @@ export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit
     setValidation(result);
     if (result.isComplete && !solved) {
       setSolved(true);
-      onSolve(Date.now() - startTimeRef.current, hintsUsed, errorCount);
+      onSolve({
+        timeTakenMs: Date.now() - startTimeRef.current,
+        hintsUsed,
+        errorCount,
+      });
     }
   }, [puzzle, solved, onSolve, hintsUsed, errorCount]);
 
-  const enterValue = useCallback((num: number) => {
+  const handleNumberInput = useCallback((num: number) => {
     if (!selected || solved) return;
     const [r, c] = selected;
     if (puzzle.grid[r][c].isGiven) return;
 
-    setHistory(prev => [...prev.slice(-30), puzzle]);
-    setPuzzle(prev => {
-      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: [...cell.notes] })));
+    setHistory((prev) => [...prev.slice(-30), puzzle]);
+    setPuzzle((prev) => {
+      const newGrid = prev.grid.map((row) => row.map((cell) => ({ ...cell, notes: [...cell.notes] })));
+
       if (noteMode) {
         const notes = newGrid[r][c].notes;
-        if (notes.includes(num)) notes.splice(notes.indexOf(num), 1); else notes.push(num);
+        if (notes.includes(num)) {
+          newGrid[r][c].notes = notes.filter(n => n !== num);
+        } else {
+          newGrid[r][c].notes = [...notes, num];
+        }
       } else {
-        const rowVals = newGrid[r].map((cc, ci) => ci !== c ? cc.playerValue : 0).filter(v => v);
-        const colVals = newGrid.map((rr, ri) => ri !== r ? rr[c].playerValue : 0).filter(v => v);
-        if (rowVals.includes(num) || colVals.includes(num)) setErrorCount(e => e + 1);
+        const rowVals = newGrid[r].map((cc, ci) => (ci !== c ? cc.playerValue : 0)).filter((v) => v);
+        const colVals = newGrid.map((rr, ri) => (ri !== r ? rr[c].playerValue : 0)).filter((v) => v);
+
+        if (rowVals.includes(num) || colVals.includes(num)) {
+          setErrorCount((e) => e + 1);
+        }
+
         newGrid[r][c].playerValue = num;
         newGrid[r][c].notes = [];
       }
@@ -72,205 +100,285 @@ export function GameBoard({ puzzle: initialPuzzle, hintsAllowed, onSolve, onQuit
     });
 
     if (!noteMode) {
+      // Auto-advance
       let found = false;
       outer: for (let rr = r; rr < n; rr++) {
-        for (let cc = (rr === r ? c + 1 : 0); cc < n; cc++) {
+        for (let cc = rr === r ? c + 1 : 0; cc < n; cc++) {
           if (!puzzle.grid[rr][cc].isGiven && puzzle.grid[rr][cc].playerValue === 0) {
-            setSelected([rr, cc]); found = true; break outer;
+            setSelected([rr, cc]);
+            found = true;
+            break outer;
           }
         }
       }
       if (!found) setSelected(null);
     }
-  }, [selected, puzzle, noteMode, solved, n]);
+  }, [selected, puzzle, solved, n, noteMode]);
 
-  const clearCell = useCallback(() => {
+  const handleErase = useCallback(() => {
     if (!selected || solved) return;
     const [r, c] = selected;
     if (puzzle.grid[r][c].isGiven) return;
-    setHistory(prev => [...prev.slice(-30), puzzle]);
-    setPuzzle(prev => {
-      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: [...cell.notes] })));
+    setHistory((prev) => [...prev.slice(-30), puzzle]);
+    setPuzzle((prev) => {
+      const newGrid = prev.grid.map((row) => row.map((cell) => ({ ...cell, notes: [...cell.notes] })));
       newGrid[r][c].playerValue = 0;
       newGrid[r][c].notes = [];
       return { ...prev, grid: newGrid };
     });
   }, [selected, puzzle, solved]);
 
-  const undo = useCallback(() => {
+  const handleUndo = useCallback(() => {
     if (history.length === 0) return;
     const prev = history[history.length - 1];
-    setHistory(h => h.slice(0, -1));
+    setHistory((h) => h.slice(0, -1));
     setPuzzle(prev);
   }, [history]);
 
-  const useHint = useCallback(() => {
-    const hintsLeft = hintsAllowed - hintsUsed;
-    if (hintsLeft <= 0 || solved) return;
+  const handleHint = useCallback(() => {
+    if (hintsRemaining <= 0 || solved) return;
     const hint = getHint(puzzle);
     if (!hint) return;
-    setHistory(prev => [...prev.slice(-30), puzzle]);
-    setHintsUsed(h => h + 1);
-    setPuzzle(prev => {
-      const newGrid = prev.grid.map(row => row.map(cell => ({ ...cell, notes: [...cell.notes] })));
+    setHistory((prev) => [...prev.slice(-30), puzzle]);
+    setHintsUsed((h) => h + 1);
+    setPuzzle((prev) => {
+      const newGrid = prev.grid.map((row) => row.map((cell) => ({ ...cell, notes: [...cell.notes] })));
       newGrid[hint.row][hint.col].playerValue = hint.value;
       newGrid[hint.row][hint.col].notes = [];
       return { ...prev, grid: newGrid };
     });
     setSelected([hint.row, hint.col]);
-  }, [puzzle, hintsUsed, hintsAllowed, solved]);
+  }, [puzzle, hintsUsed, hintsRemaining, solved]);
 
-  function getCageBorders(r: number, c: number): React.CSSProperties {
-    const cageId = puzzle.grid[r][c].cageId;
-    const cage = puzzle.cages.find(cg => cg.id === cageId);
+  function getCageBorders(r: number, c: number) {
+    const cell = puzzle.grid[r][c];
+    const cageId = cell.cageId;
+    const cage = puzzle.cages.find((cg) => cg.id === cageId);
     if (!cage) return {};
+
     const status = validation.cageStatuses[cageId];
-    const borderColor = status === 'satisfied' ? '#00ffb4'
-      : status === 'violated' ? '#ff4d6d'
-      : cage.color + '80';
+    const baseColorIdx = cageId % CAGE_COLORS.length;
+    const baseColor = CAGE_COLORS[baseColorIdx];
+
+    const borderColor = status === "satisfied" ? "var(--alien-energy)"
+      : status === "violated" ? "var(--alien-danger)"
+      : baseColor;
+
     const inCage = (rr: number, cc: number) =>
-      cage.cells.some(cl => cl.row === rr && cl.col === cc);
+      cage.cells.some((cl) => cl.row === rr && cl.col === cc);
+
     return {
-      borderTopColor:    !inCage(r - 1, c) ? borderColor : 'transparent',
-      borderBottomColor: !inCage(r + 1, c) ? borderColor : 'transparent',
-      borderLeftColor:   !inCage(r, c - 1) ? borderColor : 'transparent',
-      borderRightColor:  !inCage(r, c + 1) ? borderColor : 'transparent',
-      borderWidth: '2px',
-      borderStyle: 'solid',
+      borderTopColor: !inCage(r - 1, c) ? borderColor : "transparent",
+      borderBottomColor: !inCage(r + 1, c) ? borderColor : "transparent",
+      borderLeftColor: !inCage(r, c - 1) ? borderColor : "transparent",
+      borderRightColor: !inCage(r, c + 1) ? borderColor : "transparent",
+      borderTopWidth: !inCage(r - 1, c) ? "2px" : "0",
+      borderBottomWidth: !inCage(r + 1, c) ? "2px" : "0",
+      borderLeftWidth: !inCage(r, c - 1) ? "2px" : "0",
+      borderRightWidth: !inCage(r, c + 1) ? "2px" : "0",
     };
   }
 
   function isCageTopLeft(r: number, c: number): boolean {
     const cageId = puzzle.grid[r][c].cageId;
-    const cage = puzzle.cages.find(cg => cg.id === cageId);
+    const cage = puzzle.cages.find((cg) => cg.id === cageId);
     if (!cage) return false;
-    const minRow = Math.min(...cage.cells.map(cl => cl.row));
-    const topCells = cage.cells.filter(cl => cl.row === minRow);
-    const minCol = Math.min(...topCells.map(cl => cl.col));
+    const minRow = Math.min(...cage.cells.map((cl) => cl.row));
+    const topCells = cage.cells.filter((cl) => cl.row === minRow);
+    const minCol = Math.min(...topCells.map((cl) => cl.col));
     return r === minRow && c === minCol;
   }
 
-  const errorPositions = new Set(validation.errors.map(e => `${e.row},${e.col}`));
-  const hintsLeft = hintsAllowed - hintsUsed;
+  const errorPositions = new Set(validation.errors.map((e) => `${e.row},${e.col}`));
+  const cellSize = Math.floor(320 / n);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, userSelect: 'none' }}>
-      {/* Top bar */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <button onClick={onQuit}
-          style={{ background: 'rgba(255,77,109,0.1)', border: '1px solid rgba(255,77,109,0.25)',
-            borderRadius: 8, color: '#ff4d6d', fontSize: 11, padding: '6px 10px',
-            fontFamily: 'monospace', cursor: 'pointer' }}>
-          ✕ QUIT
-        </button>
-        <div style={{ fontFamily: 'monospace', fontSize: 22, fontWeight: 900,
-          color: timerColor, letterSpacing: '0.05em' }}>
-          {mins}:{secs}
+    <div className="flex flex-col items-center px-3 py-4 gap-4">
+      {/* Info HUD */}
+      <div className="w-full flex items-center justify-between">
+        <div className="hud-card px-3 py-1.5 flex items-center gap-2">
+          <span style={{ color: "var(--alien-plasma)", fontSize: "11px" }}>⬡</span>
+          <span style={{ fontFamily: "var(--font-mono)", color: "var(--alien-plasma)", fontSize: "13px" }} className="glow-plasma tabular-nums">
+            {hintsRemaining}
+          </span>
+          <span style={{ fontFamily: "var(--font-body)", color: "var(--alien-text-muted)", fontSize: "9px", letterSpacing: "0.2em" }} className="uppercase">
+            HINTS
+          </span>
         </div>
-        <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#4a5568', textAlign: 'right' }}>
-          <div style={{ color: dc }}>{config.emoji} {config.label}</div>
-          <div>{hintsLeft} hints left</div>
+        <div style={{ fontFamily: "var(--font-mono)", color: "var(--alien-text-dim)", fontSize: "13px" }} className="tabular-nums">
+          {formatTime(elapsed)}
+        </div>
+        <div className="hud-card px-3 py-1.5 flex items-center gap-2">
+          <span style={{ color: "var(--alien-warning)", fontSize: "11px" }}>◉</span>
+          <span style={{ fontFamily: "var(--font-mono)", color: "var(--alien-warning)", fontSize: "13px" }} className="tabular-nums">
+            {errorCount}
+          </span>
+          <span style={{ fontFamily: "var(--font-body)", color: "var(--alien-text-muted)", fontSize: "9px", letterSpacing: "0.2em" }} className="uppercase">
+            ERRORS
+          </span>
         </div>
       </div>
 
       {/* Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${n}, ${cellPx}px)`,
-        gap: 2, justifyContent: 'center', marginBottom: 16 }}>
-        {puzzle.grid.map((row, r) => row.map((cell, c) => {
-          const isSelected = selected?.[0] === r && selected?.[1] === c;
-          const isError = errorPositions.has(`${r},${c}`);
-          const isHighlighted = selected !== null && (selected[0] === r || selected[1] === c);
-          const cageBorders = getCageBorders(r, c);
-          const showLabel = isCageTopLeft(r, c);
-          const cage = puzzle.cages.find(cg => cg.id === cell.cageId);
+      <div
+        className="hud-card overflow-hidden"
+        style={{
+          display: "grid",
+          gridTemplateColumns: `repeat(${n}, ${cellSize}px)`,
+          gridTemplateRows: `repeat(${n}, ${cellSize}px)`,
+          gap: 0,
+          boxShadow: "0 0 0 1px var(--alien-border-glow), 0 0 30px #00f0ff10, inset 0 0 30px #00f0ff06",
+        }}
+      >
+        {puzzle.grid.map((row, r) =>
+          row.map((cell, c) => {
+            const isGiven = cell.isGiven;
+            const val = cell.playerValue;
+            const isSelected = selected?.[0] === r && selected?.[1] === c;
+            const isHighlighted = selected != null && (selected[0] === r || selected[1] === c) && !isSelected;
+            const isError = errorPositions.has(`${r},${c}`);
+            const cage = puzzle.cages.find((cg) => cg.id === cell.cageId);
+            const showCageLabel = isCageTopLeft(r, c);
+            const cageBorders = getCageBorders(r, c);
 
-          return (
-            <div key={`${r}-${c}`}
-              onClick={() => !cell.isGiven && setSelected(isSelected ? null : [r, c])}
-              style={{
-                width: cellPx, height: cellPx, position: 'relative',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 4, cursor: cell.isGiven ? 'default' : 'pointer',
-                background: isSelected ? `${dc}28` : isError ? 'rgba(255,77,109,0.18)'
-                  : isHighlighted ? 'rgba(255,255,255,0.04)' : cell.isGiven ? '#0d1526' : '#080d1a',
-                boxShadow: isSelected ? `inset 0 0 0 2px ${dc}` : 'none',
-                ...cageBorders, transition: 'background 0.1s',
-              }}>
-              {/* Cage digit sum label */}
-              {showLabel && cage && (
-                <div style={{ position: 'absolute', top: 2, left: 2, fontSize: 9,
-                  fontFamily: 'monospace', fontWeight: 700, color: cage.color, lineHeight: 1,
-                  background: 'rgba(4,6,15,0.85)', padding: '1px 3px', borderRadius: 3, zIndex: 2 }}>
-                  ✦{cage.targetDigitSum}
-                </div>
-              )}
-              {/* Notes */}
-              {!cell.isGiven && cell.playerValue === 0 && cell.notes.length > 0 && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)',
-                  gap: 1, padding: 2, width: '100%', height: '100%' }}>
-                  {Array.from({ length: n }, (_, i) => i + 1).map(num => (
-                    <div key={num} style={{ fontSize: 7,
-                      color: cell.notes.includes(num) ? dc : 'transparent',
-                      fontFamily: 'monospace', textAlign: 'center' }}>{num}</div>
-                  ))}
-                </div>
-              )}
-              {/* Cell value */}
-              {(cell.isGiven || cell.playerValue !== 0) && cell.notes.length === 0 && (
-                <span style={{ fontSize: n >= 8 ? 14 : 18, fontWeight: 900,
-                  fontFamily: 'monospace',
-                  color: isError ? '#ff4d6d' : cell.isGiven ? dc : '#e2e8f0' }}>
-                  {cell.isGiven ? cell.value : cell.playerValue}
-                </span>
-              )}
-            </div>
-          );
-        }))}
-      </div>
+            return (
+              <button
+                key={`${r}-${c}`}
+                onClick={() => !isGiven && setSelected([r, c])}
+                className="relative flex items-center justify-center overflow-hidden transition-all duration-100 select-none"
+                style={{
+                  width: cellSize,
+                  height: cellSize,
+                  border: "1px solid var(--alien-border)",
+                  borderStyle: "solid",
+                  ...cageBorders,
+                  background: isSelected
+                    ? "#00f0ff18"
+                    : isHighlighted
+                    ? "#00f0ff08"
+                    : isGiven
+                    ? "var(--alien-surface)"
+                    : "var(--alien-dark)",
+                  boxShadow: isSelected ? "inset 0 0 12px #00f0ff20" : "none",
+                  outline: isSelected ? "1px solid var(--alien-plasma)" : "none",
+                  outlineOffset: "-1px",
+                }}
+              >
+                {isSelected && <span className="shimmer absolute inset-0 pointer-events-none" />}
 
-      {/* Controls row */}
-      <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 12 }}>
-        <button onClick={undo} disabled={history.length === 0}
-          style={{ padding: '8px 14px', borderRadius: 8,
-            border: '1px solid rgba(255,255,255,0.08)', background: '#0d1526',
-            color: history.length > 0 ? '#e2e8f0' : '#2d3748',
-            fontFamily: 'monospace', fontSize: 12, cursor: history.length > 0 ? 'pointer' : 'not-allowed' }}>
-          ↩ UNDO
-        </button>
-        <button onClick={() => setNoteMode(m => !m)}
-          style={{ padding: '8px 14px', borderRadius: 8,
-            border: `1px solid ${noteMode ? dc + '50' : 'rgba(255,255,255,0.08)'}`,
-            background: noteMode ? `${dc}12` : '#0d1526',
-            color: noteMode ? dc : '#4a5568', fontFamily: 'monospace', fontSize: 12, cursor: 'pointer' }}>
-          ✏ NOTES {noteMode ? 'ON' : 'OFF'}
-        </button>
-        <button onClick={useHint} disabled={hintsLeft === 0 || solved}
-          style={{ padding: '8px 14px', borderRadius: 8,
-            border: `1px solid ${hintsLeft > 0 ? '#f5c54250' : 'rgba(255,255,255,0.04)'}`,
-            background: hintsLeft > 0 ? 'rgba(245,197,66,0.08)' : '#0d1526',
-            color: hintsLeft > 0 ? '#f5c542' : '#2d3748',
-            fontFamily: 'monospace', fontSize: 12,
-            cursor: hintsLeft > 0 ? 'pointer' : 'not-allowed' }}>
-          💡 HINT ({hintsLeft})
-        </button>
+                {showCageLabel && cage && (
+                  <span
+                    className="absolute top-0.5 left-0.5 leading-none pointer-events-none"
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: Math.max(6, cellSize / 5.5) + "px",
+                      color: CAGE_COLORS[cage.id % CAGE_COLORS.length],
+                      opacity: 0.9,
+                      textShadow: `0 0 4px ${CAGE_COLORS[cage.id % CAGE_COLORS.length]}`,
+                    }}
+                  >
+                    ✦{cage.targetDigitSum}
+                  </span>
+                )}
+
+                {/* Notes */}
+                {!isGiven && val === 0 && cell.notes.length > 0 && (
+                  <div className="grid grid-cols-3 gap-0.5 p-0.5 w-full h-full pointer-events-none">
+                    {Array.from({ length: n }, (_, i) => i + 1).map(num => (
+                      <div key={num} style={{
+                        fontSize: cellSize / 5,
+                        color: cell.notes.includes(num) ? "var(--alien-plasma)" : "transparent",
+                        fontFamily: "var(--font-mono)",
+                        textAlign: "center",
+                        lineHeight: 1
+                      }}>{num}</div>
+                    ))}
+                  </div>
+                )}
+
+                {(isGiven || val !== 0) && (
+                  <span
+                    className="relative z-10"
+                    style={{
+                      fontFamily: isGiven ? "var(--font-display)" : "var(--font-mono)",
+                      fontSize: cellSize > 50 ? "18px" : cellSize > 36 ? "14px" : "11px",
+                      fontWeight: isGiven ? "700" : "400",
+                      color: isError
+                        ? "var(--alien-danger)"
+                        : isGiven
+                        ? "var(--alien-plasma)"
+                        : "var(--alien-text)",
+                      textShadow: isGiven
+                        ? "0 0 8px var(--alien-plasma-dim)"
+                        : isError
+                        ? "0 0 8px var(--alien-danger)"
+                        : "none",
+                    }}
+                  >
+                    {isGiven ? cell.value : val}
+                  </span>
+                )}
+              </button>
+            );
+          })
+        )}
       </div>
 
       {/* Number pad */}
-      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.min(n, 5)}, 1fr)`, gap: 6 }}>
-        {Array.from({ length: n }, (_, i) => i + 1).map(num => (
-          <button key={num} onClick={() => enterValue(num)}
-            style={{ padding: '14px 4px', borderRadius: 10,
-              border: `1px solid ${dc}20`, background: `${dc}08`,
-              color: dc, fontFamily: 'monospace', fontSize: 18, fontWeight: 700,
-              cursor: 'pointer', opacity: selected ? 1 : 0.35 }}>
+      <div className="w-full" style={{ display: "grid", gridTemplateColumns: `repeat(${n <= 6 ? n : Math.ceil(n / 2)}, 1fr)`, gap: "6px" }}>
+        {Array.from({ length: n }, (_, i) => i + 1).map((num) => (
+          <button
+            key={num}
+            onClick={() => handleNumberInput(num)}
+            className="hud-card flex items-center justify-center transition-all duration-150 hover:border-[var(--alien-plasma)] hover:bg-[#00f0ff0a] active:scale-95"
+            style={{
+              fontFamily: "var(--font-display)",
+              fontSize: "16px",
+              color: "var(--alien-text)",
+              aspectRatio: "1",
+              padding: "8px",
+              minHeight: "44px",
+              opacity: selected ? 1 : 0.35,
+            }}
+          >
             {num}
           </button>
         ))}
-        <button onClick={clearCell}
-          style={{ padding: '14px 4px', borderRadius: 10,
-            border: '1px solid rgba(255,77,109,0.2)', background: 'rgba(255,77,109,0.06)',
-            color: '#ff4d6d', fontFamily: 'monospace', fontSize: 18, fontWeight: 700,
-            cursor: 'pointer', opacity: selected ? 1 : 0.35 }}>⌫
+      </div>
+
+      {/* Controls row */}
+      <div className="w-full flex gap-2">
+        <button
+          onClick={handleUndo}
+          disabled={history.length === 0}
+          className="flex-1 hud-card py-2.5 text-[var(--alien-text-dim)] hover:text-[var(--alien-plasma)] hover:border-[var(--alien-plasma)] hover:bg-[#00f0ff08] transition-all duration-150 disabled:opacity-30 active:scale-95"
+          style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.15em" }}
+        >
+          ◄ UNDO
+        </button>
+        <button
+          onClick={() => setNoteMode(!noteMode)}
+          className={`flex-1 hud-card py-2.5 transition-all duration-150 active:scale-95 ${
+            noteMode ? "border-[var(--alien-plasma)] bg-[#00f0ff10] text-[var(--alien-plasma)]" : "text-[var(--alien-text-dim)] hover:text-[var(--alien-plasma)] hover:border-[var(--alien-plasma)] hover:bg-[#00f0ff08]"
+          }`}
+          style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.15em" }}
+        >
+          ✏ NOTES {noteMode ? "ON" : "OFF"}
+        </button>
+        <button
+          onClick={handleErase}
+          className="flex-1 hud-card py-2.5 text-[var(--alien-text-dim)] hover:text-[var(--alien-warning)] hover:border-[var(--alien-warning)] hover:bg-[#ff6b0010] transition-all duration-150 active:scale-95"
+          style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.15em" }}
+        >
+          ✕ ERASE
+        </button>
+        <button
+          onClick={handleHint}
+          disabled={hintsRemaining <= 0}
+          className="flex-1 hud-card py-2.5 text-[var(--alien-warning)] hover:border-[var(--alien-warning)] hover:bg-[#ff6b0010] transition-all duration-150 disabled:opacity-30 active:scale-95"
+          style={{ fontFamily: "var(--font-mono)", fontSize: "11px", letterSpacing: "0.15em" }}
+        >
+          ◈ HINT ({hintsRemaining})
         </button>
       </div>
     </div>
