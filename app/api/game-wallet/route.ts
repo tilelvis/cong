@@ -11,49 +11,41 @@ const REFILL_CAP = 5;
 export async function GET(request: NextRequest) {
   try {
     const token = extractBearerToken(request.headers.get('Authorization'));
-    if (!token) {
-      return NextResponse.json({ error: 'Missing authorization token' }, { status: 401 });
-    }
-    
+    if (!token) return NextResponse.json({ error: 'Missing authorization token' }, { status: 401 });
     const { sub } = await verifyToken(token);
 
-    // 1. CRITICAL FIX: Ensure user exists in 'users' table first to satisfy Foreign Key
-    // This handles implicit registration for first-time players.
+    // Ensure user row exists first — game_wallets has a FK to users(alien_id)
     await db.execute(sql`
-      INSERT INTO users (alien_id, updated_at)
-      VALUES (${sub}, NOW())
-      ON CONFLICT (alien_id) DO UPDATE SET updated_at = NOW()
+      INSERT INTO users (alien_id)
+      VALUES (${sub})
+      ON CONFLICT (alien_id) DO NOTHING
     `);
 
-    // 2. Ensure wallet exists
+    // Now safe to create wallet
     await db.execute(sql`
       INSERT INTO game_wallets (alien_id, trials)
       VALUES (${sub}, 5)
       ON CONFLICT (alien_id) DO NOTHING
     `);
 
-    // 3. Fetch current wallet state
-    const result = (await db.execute(sql`
+    const result = await db.execute(sql`
       SELECT trials, total_purchased, total_spent, last_spent_at,
              total_points, novice_points, soldier_points, expert_points,
              games_won, games_played, current_streak, best_streak
       FROM game_wallets WHERE alien_id = ${sub}
-    `)) as any;
+    `);
 
-    const wallet = result.rows[0];
-    if (!wallet) {
-       return NextResponse.json({ error: 'Wallet not found' }, { status: 404 });
+    if (result.rows.length === 0) {
+      return NextResponse.json({ error: 'Wallet not found' }, { status: 500 });
     }
 
-    // 4. Refill Logic
+    const wallet = result.rows[0] as any;
+
     let trialsToAdd = 0;
     if (wallet.last_spent_at) {
       const msSince = Date.now() - new Date(wallet.last_spent_at).getTime();
       const windows = Math.floor(msSince / REFILL_INTERVAL_MS);
-      // Only add if user is below cap
-      if (Number(wallet.trials) < REFILL_CAP) {
-        trialsToAdd = Math.min(windows * REFILL_AMOUNT, REFILL_CAP - Number(wallet.trials));
-      }
+      trialsToAdd = Math.min(windows * REFILL_AMOUNT, REFILL_CAP);
     }
 
     if (trialsToAdd > 0) {
@@ -80,12 +72,8 @@ export async function GET(request: NextRequest) {
       best_streak:     Number(wallet.best_streak ?? 0),
     });
   } catch (error) {
-    if (error instanceof JwtErrors.JWTExpired) {
-      return NextResponse.json({ error: 'Token expired' }, { status: 401 });
-    }
-    if (error instanceof JwtErrors.JOSEError) {
-      return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
-    }
+    if (error instanceof JwtErrors.JWTExpired) return NextResponse.json({ error: 'Token expired' }, { status: 401 });
+    if (error instanceof JwtErrors.JOSEError) return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
     console.error('Error in /api/game-wallet:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
