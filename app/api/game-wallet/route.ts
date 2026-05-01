@@ -14,14 +14,12 @@ export async function GET(request: NextRequest) {
     if (!token) return NextResponse.json({ error: 'Missing authorization token' }, { status: 401 });
     const { sub } = await verifyToken(token);
 
-    // Ensure user row exists first — game_wallets has a FK to users(alien_id)
     await db.execute(sql`
       INSERT INTO users (alien_id)
       VALUES (${sub})
       ON CONFLICT (alien_id) DO NOTHING
     `);
 
-    // Now safe to create wallet
     await db.execute(sql`
       INSERT INTO game_wallets (alien_id, trials)
       VALUES (${sub}, 5)
@@ -35,11 +33,13 @@ export async function GET(request: NextRequest) {
       FROM game_wallets WHERE alien_id = ${sub}
     `);
 
-    if (result.rows.length === 0) {
+    const rows = result as unknown as any[];
+
+    if (rows.length === 0) {
       return NextResponse.json({ error: 'Wallet not found' }, { status: 500 });
     }
 
-    const wallet = result.rows[0] as any;
+    const wallet = rows[0];
 
     let trialsToAdd = 0;
     if (wallet.last_spent_at) {
