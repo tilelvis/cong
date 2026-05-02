@@ -42,7 +42,7 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
   const [solved, setSolved] = useState(false);
   const startTimeRef = useRef(Date.now());
   const containerRef = useRef<HTMLDivElement>(null);
-  const [gridPx, setGridPx] = useState(320);
+  const [gridPx, setGridPx] = useState(0);
 
   const config = LEVEL_CONFIGS[puzzle.level as keyof typeof LEVEL_CONFIGS];
   const n = puzzle.size;
@@ -50,17 +50,30 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
 
   // Measure container width to fill grid
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
+    const updateSize = () => {
+      if (containerRef.current) {
+        setGridPx(containerRef.current.offsetWidth);
+      }
+    };
+
+    updateSize();
+    window.addEventListener('resize', updateSize);
+
     const obs = new ResizeObserver(entries => {
-      const w = entries[0].contentRect.width;
-      setGridPx(Math.floor(w));
+      if (entries[0]) {
+        setGridPx(Math.floor(entries[0].contentRect.width));
+      }
     });
-    obs.observe(el);
-    return () => obs.disconnect();
+    if (containerRef.current) obs.observe(containerRef.current);
+
+    return () => {
+      window.removeEventListener('resize', updateSize);
+      obs.disconnect();
+    };
   }, []);
 
-  const cellSize = Math.floor(gridPx / n);
+  // Use measured width, fallback to a standard mobile width (390px viewport - 16px padding)
+  const cellSize = Math.floor((gridPx || 374) / n);
 
   // Timer
   useEffect(() => {
