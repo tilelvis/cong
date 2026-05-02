@@ -3,10 +3,10 @@
 import { usePathname, useRouter } from "next/navigation";
 
 const tabs = [
-  { href: "/", icon: "⬡", label: "BASE" },
-  { href: "/store", icon: "◈", label: "DEPOT" },
-  { href: "/profile", icon: "◉", label: "PROFILE" },
-  { href: "/history", icon: "◌", label: "INTEL" },
+  { href: "/",        emoji: "🎮", label: "PLAY"    },
+  { href: "/store",   emoji: "⚡", label: "TRIALS"  },
+  { href: "/history", emoji: "📋", label: "HISTORY" },
+  { href: "/profile", emoji: "👾", label: "PROFILE" },
 ];
 
 export function TabBar() {
@@ -17,13 +17,14 @@ export function TabBar() {
     <nav className="fixed bottom-0 left-0 right-0 z-50">
       <div className="max-w-[390px] mx-auto">
         <div
-          className="flex items-center justify-around px-2 py-2 pb-safe-bottom"
+          className="flex items-center justify-around px-2 py-2"
           style={{
-            background: "rgba(2, 4, 9, 0.95)",
+            background: "rgba(2, 4, 9, 0.97)",
             backdropFilter: "blur(20px)",
             WebkitBackdropFilter: "blur(20px)",
             borderTop: "1px solid var(--alien-border)",
             boxShadow: "0 -1px 0 var(--alien-border-glow), 0 -8px 30px #00f0ff08",
+            paddingBottom: "max(8px, env(safe-area-inset-bottom))",
           }}
         >
           {tabs.map((tab) => {
@@ -32,23 +33,15 @@ export function TabBar() {
               <button
                 key={tab.href}
                 onClick={() => router.push(tab.href)}
-                className="flex flex-col items-center gap-1 px-5 py-1.5 group transition-all duration-200 relative"
+                className="flex flex-col items-center gap-0.5 px-4 py-1 transition-all duration-200 relative"
+                style={{ minWidth: 60 }}
               >
-                <span
-                  className="text-xl transition-all duration-200"
-                  style={{
-                    color: isActive ? "var(--alien-plasma)" : "var(--alien-text-muted)",
-                    filter: isActive ? "drop-shadow(0 0 8px var(--alien-plasma))" : "none",
-                    fontSize: "18px",
-                  }}
-                >
-                  {tab.icon}
-                </span>
+                <span style={{ fontSize: "22px", lineHeight: 1 }}>{tab.emoji}</span>
                 <span
                   style={{
                     fontFamily: "var(--font-mono)",
-                    letterSpacing: "0.12em",
-                    fontSize: "8px",
+                    letterSpacing: "0.1em",
+                    fontSize: "9px",
                     color: isActive ? "var(--alien-plasma)" : "var(--alien-text-muted)",
                     textShadow: isActive ? "0 0 8px var(--alien-plasma)" : "none",
                   }}
@@ -58,10 +51,10 @@ export function TabBar() {
                 </span>
                 {isActive && (
                   <div
-                    className="w-1 h-1 rounded-full alien-pulse absolute -bottom-0.5"
+                    className="absolute -bottom-0.5 left-1/2 -translate-x-1/2 w-4 h-0.5 rounded-full"
                     style={{
                       background: "var(--alien-plasma)",
-                      boxShadow: "0 0 6px var(--alien-plasma)",
+                      boxShadow: "0 0 8px var(--alien-plasma)",
                     }}
                   />
                 )}
