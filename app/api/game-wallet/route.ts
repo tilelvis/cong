@@ -26,20 +26,18 @@ export async function GET(request: NextRequest) {
       ON CONFLICT (alien_id) DO NOTHING
     `);
 
-    const result = await db.execute(sql`
+    const result = (await db.execute(sql`
       SELECT trials, total_purchased, total_spent, last_spent_at,
              total_points, novice_points, soldier_points, expert_points,
              games_won, games_played, current_streak, best_streak
       FROM game_wallets WHERE alien_id = ${sub}
-    `);
+    `)) as any;
 
-    const rows = result as unknown as any[];
-
-    if (rows.length === 0) {
+    if (!result.rows || result.rows.length === 0) {
       return NextResponse.json({ error: 'Wallet not found' }, { status: 500 });
     }
 
-    const wallet = rows[0];
+    const wallet = result.rows[0];
 
     let trialsToAdd = 0;
     if (wallet.last_spent_at) {
@@ -59,17 +57,17 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json({
-      trials:          Number(wallet.trials),
-      total_purchased: Number(wallet.total_purchased ?? 0),
-      total_spent:     Number(wallet.total_spent ?? 0),
-      total_points:    Number(wallet.total_points ?? 0),
-      novice_points:   Number(wallet.novice_points ?? 0),
-      soldier_points:  Number(wallet.soldier_points ?? 0),
-      expert_points:   Number(wallet.expert_points ?? 0),
-      games_won:       Number(wallet.games_won ?? 0),
-      games_played:    Number(wallet.games_played ?? 0),
-      current_streak:  Number(wallet.current_streak ?? 0),
-      best_streak:     Number(wallet.best_streak ?? 0),
+      trials:          Number(wallet?.trials ?? 0),
+      total_purchased: Number(wallet?.total_purchased ?? 0),
+      total_spent:     Number(wallet?.total_spent ?? 0),
+      total_points:    Number(wallet?.total_points ?? 0),
+      novice_points:   Number(wallet?.novice_points ?? 0),
+      soldier_points:  Number(wallet?.soldier_points ?? 0),
+      expert_points:   Number(wallet?.expert_points ?? 0),
+      games_won:       Number(wallet?.games_won ?? 0),
+      games_played:    Number(wallet?.games_played ?? 0),
+      current_streak:  Number(wallet?.current_streak ?? 0),
+      best_streak:     Number(wallet?.best_streak ?? 0),
     });
   } catch (error) {
     if (error instanceof JwtErrors.JWTExpired) return NextResponse.json({ error: 'Token expired' }, { status: 401 });

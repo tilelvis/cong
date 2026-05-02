@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
       ON CONFLICT (alien_id) DO NOTHING
     `);
 
-    const result = await db.execute(sql`
+    const result = (await db.execute(sql`
       UPDATE game_wallets SET
         trials        = trials - 1,
         total_spent   = total_spent + 1,
@@ -36,11 +36,9 @@ export async function POST(request: NextRequest) {
         updated_at    = NOW()
       WHERE alien_id = ${sub} AND trials > 0
       RETURNING trials
-    `);
+    `)) as any;
 
-    const rows = result as unknown as any[];
-
-    if (rows.length === 0) {
+    if (!result.rows || result.rows.length === 0) {
       return NextResponse.json({ error: 'No trials remaining' }, { status: 402 });
     }
 
@@ -62,7 +60,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       sessionId,
       puzzle: puzzleForClient,
-      trialsRemaining: Number(rows[0].trials),
+      trialsRemaining: Number(result.rows[0].trials),
     });
   } catch (error) {
     if (error instanceof JwtErrors.JWTExpired) return NextResponse.json({ error: 'Token expired' }, { status: 401 });
