@@ -272,8 +272,8 @@ export default function HomePage() {
         </div>
       </div>
 
-      {/* ── MIDDLE: level carousel (fills remaining space) ── */}
-      <div className="flex-1 flex flex-col justify-center px-4 min-h-0">
+      {/* ── MIDDLE: level carousel ── */}
+      <div className="flex-1 flex flex-col justify-center px-4 min-h-0" style={{ maxHeight: 260 }}>
         <div style={{ fontFamily: "var(--font-mono)", fontSize: "9px" }}
           className="text-[var(--alien-text-muted)] tracking-[0.35em] uppercase mb-2 text-center">
           // SWIPE TO SELECT THREAT LEVEL

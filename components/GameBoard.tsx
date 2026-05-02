@@ -42,7 +42,9 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
   const [solved, setSolved] = useState(false);
   const startTimeRef = useRef(Date.now());
   const containerRef = useRef<HTMLDivElement>(null);
-  const [gridPx, setGridPx] = useState(0);
+  const [gridPx, setGridPx] = useState(() =>
+    typeof window !== "undefined" ? window.innerWidth - 16 : 374
+  );
 
   const config = LEVEL_CONFIGS[puzzle.level as keyof typeof LEVEL_CONFIGS];
   const n = puzzle.size;
@@ -196,7 +198,7 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
   const padCols = n <= 5 ? n : n <= 6 ? 6 : n <= 8 ? 4 : 5;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "4px 8px 8px" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden", padding: "4px 8px 72px 8px" }}>
 
       {/* HUD row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, flexShrink: 0 }}>
@@ -298,8 +300,6 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
         </div>
       </div>
 
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
 
       {/* Number pad */}
       <div style={{ display: "grid", gridTemplateColumns: `repeat(${padCols}, 1fr)`, gap: 4, marginBottom: 6, flexShrink: 0 }}>
