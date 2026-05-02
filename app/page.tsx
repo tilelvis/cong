@@ -1,25 +1,19 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useAlien } from "@alien_org/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { sanitize } from "@/lib/sanitize";
 import { GameBoard } from "@/components/GameBoard";
 import { LEVEL_CONFIGS, type DifficultyLevel, type Puzzle, type ScoreBreakdown } from "@/lib/puzzle-engine";
+import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
-
-// ── Types ────────────────────────────────────────────────────────────────────
 
 interface Wallet {
   trials: number;
   total_points: number;
-  novice_points: number;
-  soldier_points: number;
-  expert_points: number;
   games_won: number;
   games_played: number;
   current_streak: number;
-  best_streak: number;
 }
 
 interface ActiveGame {
@@ -33,72 +27,56 @@ interface GameResult {
   score: ScoreBreakdown;
 }
 
-interface LeaderboardEntry {
-  alien_id: string;
-  total_points: number;
-  games_won: number;
-  games_played: number;
-  rank: number;
-}
-
-// ── Badge helper ──────────────────────────────────────────────────────────────
-
 function getBadgeName(points: number): string {
   if (points >= 10000) return "OVERLORD";
-  if (points >= 5000) return "WARLORD";
-  if (points >= 2000) return "COMMANDER";
-  if (points >= 500) return "SOLDIER";
-  if (points >= 100) return "CADET";
+  if (points >= 5000)  return "WARLORD";
+  if (points >= 2000)  return "COMMANDER";
+  if (points >= 500)   return "SOLDIER";
+  if (points >= 100)   return "CADET";
   return "RECRUIT";
 }
 
-// ── Fetch helpers ─────────────────────────────────────────────────────────────
+const LEVELS: DifficultyLevel[] = ["cadet", "scout", "ranger", "warlord", "phantom", "alien-mind"];
 
-async function fetchWallet(token: string): Promise<Wallet> {
-  const res = await fetch("/api/game-wallet", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error("Failed to fetch wallet");
-  return res.json();
-}
-
-async function fetchLeaderboard(token: string): Promise<{ leaderboard: LeaderboardEntry[]; me: LeaderboardEntry | null }> {
-  const res = await fetch("/api/leaderboard", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) throw new Error("Failed to fetch leaderboard");
-  return res.json();
-}
-
-// ── Main Page ─────────────────────────────────────────────────────────────────
+const LEVEL_BG: Record<DifficultyLevel, string> = {
+  "cadet":      "linear-gradient(135deg,#001a10 0%,#003a20 100%)",
+  "scout":      "linear-gradient(135deg,#001a2a 0%,#003a5a 100%)",
+  "ranger":     "linear-gradient(135deg,#001a3d 0%,#003a8c 100%)",
+  "warlord":    "linear-gradient(135deg,#1a1200 0%,#3a2a00 100%)",
+  "phantom":    "linear-gradient(135deg,#1a0800 0%,#3a1800 100%)",
+  "alien-mind": "linear-gradient(135deg,#1a0020 0%,#3a0050 100%)",
+};
 
 export default function HomePage() {
   const { authToken } = useAlien();
   const queryClient = useQueryClient();
+  const router = useRouter();
 
-  const [selectedLevel, setSelectedLevel] = useState<DifficultyLevel>("cadet");
+  const [selectedIdx, setSelectedIdx] = useState(0);
   const [isStarting, setIsStarting] = useState(false);
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null);
   const [trialsRemaining, setTrialsRemaining] = useState(0);
   const [result, setResult] = useState<GameResult | null>(null);
 
+  // Touch tracking for swipe
+  const touchStartX = useRef(0);
+  const touchStartY = useRef(0);
+
+  const selectedLevel = LEVELS[selectedIdx];
+  const cfg = LEVEL_CONFIGS[selectedLevel];
+
   const { data: wallet } = useQuery({
     queryKey: ["wallet"],
-    queryFn: () => fetchWallet(authToken!),
+    queryFn: async () => {
+      const res = await fetch("/api/game-wallet", {
+        headers: { Authorization: `Bearer ${authToken!}` },
+      });
+      if (!res.ok) throw new Error("Failed");
+      return res.json() as Promise<Wallet>;
+    },
     enabled: !!authToken,
     refetchInterval: 30000,
   });
-
-  const { data: lbData } = useQuery({
-    queryKey: ["leaderboard"],
-    queryFn: () => fetchLeaderboard(authToken!),
-    enabled: !!authToken,
-  });
-
-  const leaderboard = lbData?.leaderboard ?? [];
-  const myAlienId = lbData?.me?.alien_id;
-
-  // ── Start game ──────────────────────────────────────────────────────────────
 
   const startGame = async () => {
     if (!authToken || isStarting) return;
@@ -106,10 +84,7 @@ export default function HomePage() {
     try {
       const res = await fetch("/api/game/start", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ level: selectedLevel }),
       });
       if (!res.ok) {
@@ -128,45 +103,28 @@ export default function HomePage() {
     }
   };
 
-  // ── Solve ───────────────────────────────────────────────────────────────────
-
   const handleSolve = useCallback(async (params: { timeTakenMs: number; hintsUsed: number; errorCount: number }) => {
     if (!authToken || !activeGame) return;
     try {
       const res = await fetch("/api/game/submit", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ sessionId: activeGame.sessionId, ...params }),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        toast.error(err.error ?? "Failed to submit");
-        return;
-      }
+      if (!res.ok) { toast.error("Failed to submit"); return; }
       const data = await res.json();
       setResult({ won: true, score: data.score });
       setActiveGame(null);
       queryClient.invalidateQueries({ queryKey: ["wallet"] });
-      queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
-    } catch {
-      toast.error("Network error on submit.");
-    }
+    } catch { toast.error("Network error."); }
   }, [authToken, activeGame, queryClient]);
-
-  // ── Fail / abort ────────────────────────────────────────────────────────────
 
   const handleFail = useCallback(async () => {
     if (!authToken || !activeGame) return;
     try {
       await fetch("/api/game/fail", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
         body: JSON.stringify({ sessionId: activeGame.sessionId }),
       });
     } catch {}
@@ -175,18 +133,11 @@ export default function HomePage() {
     queryClient.invalidateQueries({ queryKey: ["wallet"] });
   }, [authToken, activeGame, queryClient]);
 
-  const resetGame = () => {
-    setResult(null);
-    queryClient.invalidateQueries({ queryKey: ["wallet"] });
-    queryClient.invalidateQueries({ queryKey: ["leaderboard"] });
-  };
-
-  // ── RESULT SCREEN ───────────────────────────────────────────────────────────
-
+  // ── RESULT SCREEN ────────────────────────────────────────────────────────────
   if (result) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen px-4 py-8">
-        <div className="w-full hud-card border-glow p-6 text-center space-y-4">
+      <div style={{ height: "100dvh", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px 20px 90px" }}>
+        <div className="w-full hud-card p-6 text-center space-y-4" style={{ maxWidth: 360 }}>
           <div
             className={`text-3xl font-black uppercase tracking-widest ${result.won ? "text-[var(--alien-energy)] glow-energy" : "text-[var(--alien-danger)]"}`}
             style={{ fontFamily: "var(--font-display)" }}
@@ -194,241 +145,257 @@ export default function HomePage() {
             {result.won ? "◈ MISSION SUCCESS" : "✕ MISSION FAILED"}
           </div>
 
-          {result.won && (
-            <div className="space-y-3 mt-4">
+          {result.won && result.score.final > 0 && (
+            <div className="space-y-2 mt-2">
               {[
-                { label: "BASE SCORE", val: result.score.base.toString() },
-                { label: "TIME BONUS", val: `+${result.score.timeBonus}` },
-                { label: "HINT PENALTY", val: `-${result.score.hintPenalty}` },
-                { label: "ERROR PENALTY", val: `-${result.score.errorPenalty}` },
-                { label: "STREAK BONUS", val: `+${result.score.streakBonus}` },
+                { label: "BASE SCORE",    val: `+${result.score.base}`        },
+                { label: "TIME BONUS",    val: `+${result.score.timeBonus}`   },
+                { label: "HINT PENALTY",  val: `-${result.score.hintPenalty}` },
+                { label: "ERROR PENALTY", val: `-${result.score.errorPenalty}`},
+                { label: "STREAK BONUS",  val: `+${result.score.streakBonus}` },
               ].map(({ label, val }) => (
-                <div key={label} className="flex justify-between items-center border-b border-[var(--alien-border)] pb-2">
-                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-xs tracking-widest uppercase">{label}</span>
-                  <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text)] text-sm">{val}</span>
+                <div key={label} className="flex justify-between px-2">
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px" }} className="text-[var(--alien-text-muted)] uppercase tracking-widest">{label}</span>
+                  <span style={{ fontFamily: "var(--font-mono)", fontSize: "10px" }} className="text-[var(--alien-text-dim)]">{val}</span>
                 </div>
               ))}
-              <div className="flex justify-between items-center pt-2">
-                <span style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-plasma)] text-sm uppercase tracking-widest">TOTAL</span>
-                <span style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-energy)] text-2xl font-black glow-energy">{result.score.final}</span>
+              <div className="border-t border-[var(--alien-border)] pt-2 flex justify-between px-2">
+                <span style={{ fontFamily: "var(--font-display)", fontSize: "13px" }} className="text-[var(--alien-plasma)] uppercase tracking-widest">INTEL PTS</span>
+                <span style={{ fontFamily: "var(--font-display)", fontSize: "18px" }} className="text-[var(--alien-energy)] glow-energy font-black">{result.score.final.toLocaleString()}</span>
               </div>
             </div>
           )}
 
-          <button
-            onClick={resetGame}
-            style={{ fontFamily: "var(--font-display)" }}
-            className="w-full mt-4 py-3 rounded-lg border border-[var(--alien-plasma)] text-[var(--alien-plasma)] glow-plasma text-sm uppercase tracking-widest hover:bg-[#00f0ff10] transition-colors"
-          >
-            ◄ RETURN TO BASE
-          </button>
+          <div className="flex gap-3 pt-2">
+            <button
+              onClick={() => { setResult(null); queryClient.invalidateQueries({ queryKey: ["wallet"] }); }}
+              className="flex-1 py-3 rounded-lg font-black uppercase transition-all active:scale-95"
+              style={{ fontFamily: "var(--font-display)", fontSize: "11px", letterSpacing: "0.2em", background: "linear-gradient(135deg,#001a3d,#003a8c)", border: "1px solid var(--alien-plasma)", color: "var(--alien-plasma)" }}
+            >
+              ⬡ PLAY AGAIN
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  // ── ACTIVE GAME ─────────────────────────────────────────────────────────────
-
+  // ── PLAYING SCREEN ───────────────────────────────────────────────────────────
   if (activeGame) {
     return (
-      <div className="flex flex-col min-h-screen">
-        {/* HUD top bar */}
-        <div
-          className="border-b border-[var(--alien-border)] px-4 py-2.5 flex items-center justify-between"
-          style={{ background: "rgba(6,13,26,0.95)", boxShadow: "0 1px 0 var(--alien-border-glow), 0 4px 20px #00f0ff08" }}
-        >
+      <div style={{ height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        {/* Top bar */}
+        <div className="flex items-center justify-between px-4 py-2 shrink-0">
           <button
             onClick={handleFail}
-            style={{ fontFamily: "var(--font-mono)" }}
-            className="text-[var(--alien-warning)] text-xs tracking-widest uppercase hover:opacity-70 transition-opacity"
+            style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}
+            className="text-[var(--alien-warning)] uppercase tracking-widest hover:opacity-70 transition-opacity"
           >
             ◄ ABORT
           </button>
-          <div style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-plasma)] text-xs glow-plasma uppercase tracking-widest">
-            {activeGame.level.toUpperCase()} PROTOCOL
+          <div style={{ fontFamily: "var(--font-display)", fontSize: "11px" }} className="text-[var(--alien-plasma)] glow-plasma uppercase tracking-widest">
+            {activeGame.level.replace("-", " ").toUpperCase()} PROTOCOL
           </div>
-          <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-dim)] text-xs">
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }} className="text-[var(--alien-text-dim)]">
             ⬡ {trialsRemaining}
           </div>
         </div>
-
-        <GameBoard
-          puzzle={activeGame.puzzle}
-          level={activeGame.level}
-          onSolve={handleSolve}
-          onFail={handleFail}
-        />
+        {/* Board fills remaining space */}
+        <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <GameBoard
+            puzzle={activeGame.puzzle}
+            level={activeGame.level}
+            onSolve={handleSolve}
+            onFail={handleFail}
+          />
+        </div>
       </div>
     );
   }
 
-  // ── HOME SCREEN ─────────────────────────────────────────────────────────────
+  // ── HOME SCREEN ──────────────────────────────────────────────────────────────
+  const trials = wallet?.trials ?? 0;
+  const noTrials = trials <= 0;
 
-  const levels: DifficultyLevel[] = ["cadet", "scout", "ranger", "warlord", "phantom", "alien-mind"];
+  const onTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchStartY.current = e.touches[0].clientY;
+  };
+
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const dx = e.changedTouches[0].clientX - touchStartX.current;
+    const dy = Math.abs(e.changedTouches[0].clientY - touchStartY.current);
+    if (Math.abs(dx) < 40 || dy > 60) return; // not a horizontal swipe
+    if (dx < 0) setSelectedIdx(i => Math.min(i + 1, LEVELS.length - 1));
+    else        setSelectedIdx(i => Math.max(i - 1, 0));
+  };
 
   return (
-    <div className="px-4 py-6 pb-28 space-y-5">
-      {/* Header */}
-      <div className="text-center pt-4 pb-2">
-        <div
-          className="text-5xl mb-3 alien-flicker"
-          style={{ filter: "drop-shadow(0 0 24px var(--alien-plasma))" }}
-        >
-          🛸
-        </div>
-        <h1
-          style={{ fontFamily: "var(--font-display)", letterSpacing: "0.2em" }}
-          className="text-2xl font-black text-[var(--alien-plasma)] glow-plasma uppercase"
-        >
-          CONGRUENCE
-        </h1>
-        <p style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-dim)] text-[10px] mt-1 tracking-[0.25em] uppercase">
-          NEURAL GRID PROTOCOL v2.4
-        </p>
-      </div>
+    <div style={{ height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden", paddingBottom: 64 }}>
 
-      {/* Rank + stats */}
-      <div className="hud-card p-4 space-y-4">
-        {/* Clearance level */}
-        <div className="text-center">
-          <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-[0.35em] uppercase mb-1">
-            CLEARANCE LEVEL
+      {/* ── TOP: header + stats ── */}
+      <div className="shrink-0 px-4 pt-4 pb-2">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h1 style={{ fontFamily: "var(--font-display)", letterSpacing: "0.2em", fontSize: "20px" }}
+              className="font-black text-[var(--alien-plasma)] glow-plasma uppercase leading-none">
+              CONGRUENCE
+            </h1>
+            <p style={{ fontFamily: "var(--font-mono)", fontSize: "9px" }}
+              className="text-[var(--alien-text-muted)] tracking-[0.2em] uppercase mt-0.5">
+              NEURAL GRID PROTOCOL v2.4
+            </p>
           </div>
-          <div style={{ fontFamily: "var(--font-display)" }} className="text-[var(--alien-gold)] text-xl font-black glow-gold">
-            {getBadgeName(wallet?.total_points ?? 0)}
+          <div className="text-right">
+            <div style={{ fontFamily: "var(--font-display)", fontSize: "11px" }} className="text-[var(--alien-gold)] glow-gold uppercase">
+              {getBadgeName(wallet?.total_points ?? 0)}
+            </div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "10px" }} className="text-[var(--alien-text-muted)]">
+              {(wallet?.total_points ?? 0).toLocaleString()} pts
+            </div>
           </div>
         </div>
 
-        {/* Divider */}
-        <div className="border-t border-[var(--alien-border)]" />
-
-        {/* 2×2 stat grid */}
-        <div className="grid grid-cols-2 gap-2">
+        {/* Stat row — single line */}
+        <div className="grid grid-cols-4 gap-2">
           {[
-            { icon: "⬡", val: wallet?.games_played ?? 0, label: "MISSIONS", color: "var(--alien-plasma)", glow: "glow-plasma" },
-            { icon: "◈", val: wallet?.games_won ?? 0, label: "VICTORIES", color: "var(--alien-energy)", glow: "glow-energy" },
-            { icon: "⚡", val: wallet?.current_streak ?? 0, label: "STREAK", color: "var(--alien-gold)", glow: "glow-gold" },
-            { icon: "◉", val: (wallet?.total_points ?? 0).toLocaleString(), label: "INTEL PTS", color: "var(--alien-plasma)", glow: "glow-plasma" },
-          ].map(({ icon, val, label, color, glow }) => (
-            <div key={label} className="bg-[var(--alien-void)] border border-[var(--alien-border)] rounded-lg p-3 flex flex-col items-center gap-1">
-              <span className="text-lg" style={{ color, filter: `drop-shadow(0 0 6px ${color})` }}>{icon}</span>
-              <span style={{ fontFamily: "var(--font-mono)", color }} className={`text-xl font-bold ${glow}`}>{val}</span>
-              <span style={{ fontFamily: "var(--font-body)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-widest uppercase">{label}</span>
+            { val: wallet?.games_played ?? 0,    label: "MISSIONS", color: "var(--alien-plasma)"  },
+            { val: wallet?.games_won ?? 0,       label: "WINS",     color: "var(--alien-energy)"  },
+            { val: wallet?.current_streak ?? 0,  label: "STREAK",   color: "var(--alien-gold)"    },
+            { val: trials,                        label: "TRIALS",   color: "var(--alien-plasma)"  },
+          ].map(({ val, label, color }) => (
+            <div key={label} className="hud-card py-2 flex flex-col items-center gap-0.5">
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "16px", color }} className="font-bold">{val}</span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: "8px" }} className="text-[var(--alien-text-muted)] uppercase tracking-widest">{label}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Level selector */}
-      <div>
-        <div style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-[0.35em] uppercase px-1 mb-3">
-          // SELECT THREAT LEVEL
+      {/* ── MIDDLE: level carousel (fills remaining space) ── */}
+      <div className="flex-1 flex flex-col justify-center px-4 min-h-0">
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: "9px" }}
+          className="text-[var(--alien-text-muted)] tracking-[0.35em] uppercase mb-2 text-center">
+          // SWIPE TO SELECT THREAT LEVEL
         </div>
-        <div className="space-y-2">
-          {levels.map((lvl) => {
-            const cfg = LEVEL_CONFIGS[lvl];
-            return (
-              <button
-                key={lvl}
-                onClick={() => setSelectedLevel(lvl)}
-                className={`w-full hud-card p-3 flex items-center justify-between transition-all duration-200 ${
-                  selectedLevel === lvl ? "border-glow !border-[var(--alien-border-glow)]" : "opacity-60 hover:opacity-90"
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={`w-1.5 h-6 rounded-full ${selectedLevel === lvl ? "alien-pulse" : "opacity-30"}`}
-                    style={{ background: selectedLevel === lvl ? cfg.color : "var(--alien-text-muted)", boxShadow: selectedLevel === lvl ? `0 0 8px ${cfg.color}` : "none" }}
-                  />
-                  <span style={{ fontFamily: "var(--font-display)" }} className={`text-sm uppercase tracking-widest ${selectedLevel === lvl ? "text-[var(--alien-plasma)] glow-plasma" : "text-[var(--alien-text-dim)]"}`}>
-                    {cfg.label.toUpperCase()}
-                  </span>
-                </div>
-                <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[10px]">
-                  {cfg.size}×{cfg.size} · {cfg.description.split(" · ").slice(-1)}
-                </span>
-              </button>
-            );
-          })}
+
+        {/* Carousel strip */}
+        <div
+          className="relative overflow-hidden"
+          onTouchStart={onTouchStart}
+          onTouchEnd={onTouchEnd}
+        >
+          {/* Cards container — translate to show selected */}
+          <div
+            style={{
+              display: "flex",
+              gap: "12px",
+              transition: "transform 0.35s cubic-bezier(0.25,0.46,0.45,0.94)",
+              transform: `translateX(calc(50% - ${selectedIdx * (268 + 12) + 134}px))`,
+              padding: "8px 0",
+            }}
+          >
+            {LEVELS.map((lvl, i) => {
+              const c = LEVEL_CONFIGS[lvl];
+              const isActive = i === selectedIdx;
+              return (
+                <button
+                  key={lvl}
+                  onClick={() => setSelectedIdx(i)}
+                  style={{
+                    width: 268,
+                    minWidth: 268,
+                    height: 160,
+                    borderRadius: 16,
+                    background: LEVEL_BG[lvl],
+                    border: `2px solid ${isActive ? c.color : "var(--alien-border)"}`,
+                    boxShadow: isActive ? `0 0 24px ${c.color}50, inset 0 0 24px ${c.color}10` : "none",
+                    transform: isActive ? "scale(1)" : "scale(0.88)",
+                    transition: "all 0.35s cubic-bezier(0.25,0.46,0.45,0.94)",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                    padding: 20,
+                    opacity: isActive ? 1 : 0.55,
+                  }}
+                >
+                  <span style={{ fontSize: 36 }}>{c.emoji}</span>
+                  <div style={{ fontFamily: "var(--font-display)", fontSize: 18, fontWeight: 900, color: c.color, letterSpacing: "0.15em", textShadow: `0 0 12px ${c.color}` }}>
+                    {c.label.toUpperCase()}
+                  </div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--alien-text-muted)", textAlign: "center", lineHeight: 1.6 }}>
+                    {c.size}×{c.size} grid · {c.hintAllowance} hints
+                  </div>
+                  <div style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: c.color, opacity: 0.8 }}>
+                    {c.baseScore.toLocaleString()} BASE PTS
+                  </div>
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
 
-      {/* Launch button */}
-      <button
-        onClick={startGame}
-        disabled={!wallet || wallet.trials <= 0 || isStarting}
-        className="w-full relative overflow-hidden py-4 rounded-lg font-black uppercase transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.98]"
-        style={{
-          fontFamily: "var(--font-display)",
-          letterSpacing: "0.25em",
-          fontSize: "13px",
-          background: "linear-gradient(135deg, #001a3d 0%, #003a8c 50%, #001a3d 100%)",
-          border: "1px solid var(--alien-plasma)",
-          color: "var(--alien-plasma)",
-          boxShadow: "0 0 20px var(--alien-plasma-dim), inset 0 0 20px #00f0ff10",
-        }}
-      >
-        <span className="shimmer absolute inset-0 pointer-events-none" />
-        <span className="relative z-10">
-          {isStarting ? "⚡ INITIATING..." : `⬡ LAUNCH MISSION · ${wallet?.trials ?? 0} TRIALS`}
-        </span>
-      </button>
-
-      {/* Trial bar */}
-      <div className="flex items-center justify-center gap-2">
-        <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-muted)] text-[9px] tracking-widest uppercase">
-          TRIAL CREDITS
-        </span>
-        <div className="flex gap-0.5 items-end">
-          {Array.from({ length: Math.min(wallet?.trials ?? 0, 10) }).map((_, i) => (
-            <div
+        {/* Dot indicators */}
+        <div className="flex items-center justify-center gap-1.5 mt-3">
+          {LEVELS.map((_, i) => (
+            <button
               key={i}
-              className="w-1.5 h-3 bg-[var(--alien-plasma)] rounded-sm alien-pulse"
+              onClick={() => setSelectedIdx(i)}
               style={{
-                animationDelay: `${i * 0.12}s`,
-                opacity: 0.85,
-                boxShadow: "0 0 4px var(--alien-plasma)",
+                width: i === selectedIdx ? 16 : 6,
+                height: 6,
+                borderRadius: 3,
+                background: i === selectedIdx ? cfg.color : "var(--alien-border)",
+                boxShadow: i === selectedIdx ? `0 0 6px ${cfg.color}` : "none",
+                transition: "all 0.3s ease",
+                border: "none",
+                cursor: "pointer",
               }}
             />
           ))}
-          {(wallet?.trials ?? 0) > 10 && (
-            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-plasma)] text-xs ml-1">
-              +{(wallet?.trials ?? 0) - 10}
-            </span>
-          )}
         </div>
       </div>
 
-      {/* Leaderboard */}
-      {leaderboard.length > 0 && (
-        <div className="hud-card overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-[var(--alien-border)] flex items-center gap-2">
-            <span className="text-[var(--alien-plasma)] text-sm">◉</span>
-            <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-text-dim)] text-[9px] tracking-[0.25em] uppercase">
-              GLOBAL INTEL RANKINGS
-            </span>
-          </div>
-          {leaderboard.slice(0, 10).map((entry, i) => (
-            <div
-              key={entry.alien_id}
-              className={`px-4 py-2.5 flex items-center gap-3 border-b border-[var(--alien-border)] last:border-0 transition-colors ${entry.alien_id === myAlienId ? "bg-[#00f0ff06]" : ""}`}
-            >
-              <span
-                style={{ fontFamily: "var(--font-mono)" }}
-                className={`text-xs w-5 text-right tabular-nums shrink-0 ${i === 0 ? "text-[var(--alien-gold)] glow-gold" : i === 1 ? "text-[var(--alien-text-dim)]" : "text-[var(--alien-text-muted)]"}`}
-              >
-                {i === 0 ? "▲" : i + 1}
-              </span>
-              <span style={{ fontFamily: "var(--font-mono)" }} className="flex-1 text-xs text-[var(--alien-text-dim)] truncate">
-                {sanitize(entry.alien_id)}
-              </span>
-              <span style={{ fontFamily: "var(--font-mono)" }} className="text-[var(--alien-plasma)] text-xs glow-plasma tabular-nums shrink-0">
-                {entry.total_points.toLocaleString()}
-              </span>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* ── BOTTOM: launch + get trials ── */}
+      <div className="shrink-0 px-4 pb-3 space-y-2">
+        <button
+          onClick={startGame}
+          disabled={noTrials || isStarting}
+          className="w-full relative overflow-hidden py-4 rounded-lg font-black uppercase transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed active:scale-[0.98]"
+          style={{
+            fontFamily: "var(--font-display)",
+            letterSpacing: "0.25em",
+            fontSize: "13px",
+            background: noTrials ? "var(--alien-surface)" : `linear-gradient(135deg, ${cfg.color}22 0%, ${cfg.color}44 50%, ${cfg.color}22 100%)`,
+            border: `1px solid ${cfg.color}`,
+            color: cfg.color,
+            boxShadow: noTrials ? "none" : `0 0 20px ${cfg.color}40`,
+          }}
+        >
+          <span className="shimmer absolute inset-0 pointer-events-none" />
+          <span className="relative z-10">
+            {isStarting ? "⚡ INITIATING..." : noTrials ? "NO TRIALS — GET MORE" : `⬡ LAUNCH MISSION · ${trials} TRIALS`}
+          </span>
+        </button>
+
+        <button
+          onClick={() => router.push("/store")}
+          className="w-full py-2.5 rounded-lg transition-all duration-200 active:scale-[0.98] hover:bg-[#00f0ff08]"
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: "11px",
+            letterSpacing: "0.2em",
+            color: "var(--alien-energy)",
+            border: "1px solid var(--alien-border)",
+            background: "transparent",
+          }}
+        >
+          ⚡ GET TRIALS
+        </button>
+      </div>
     </div>
   );
 }
