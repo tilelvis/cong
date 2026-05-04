@@ -39,9 +39,9 @@ export default function StorePage() {
     let attempts = 0;
     const poll = setInterval(() => {
       attempts++;
-      queryClient.invalidateQueries({ queryKey: ["wallet"] });
-      queryClient.invalidateQueries({ queryKey: ["purchase-history"] });
-      if (attempts >= 15) clearInterval(poll);
+      queryClient.invalidateQueries({ queryKey: ["wallet"], refetchType: "all" });
+      queryClient.invalidateQueries({ queryKey: ["purchase-history"], refetchType: "all" });
+      if (attempts >= 20) clearInterval(poll);
     }, 2000);
   }, [queryClient]);
 

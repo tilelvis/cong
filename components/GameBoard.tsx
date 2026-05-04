@@ -40,6 +40,7 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
   const [history, setHistory] = useState<Puzzle[]>([]);
   const [elapsed, setElapsed] = useState(0);
   const [solved, setSolved] = useState(false);
+  const solvedRef = useRef(false);
   const startTimeRef = useRef(Date.now());
   const containerRef = useRef<HTMLDivElement>(null);
   const [gridPx, setGridPx] = useState(() =>
@@ -89,6 +90,7 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
     const result = validateGrid(puzzle);
     setValidation(result);
     if (result.isComplete && !solved) {
+      solvedRef.current = true;
       setSolved(true);
       onSolve({ timeTakenMs: Date.now() - startTimeRef.current, hintsUsed, errorCount });
     }
@@ -113,8 +115,7 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
       }
       return { ...prev, grid: newGrid };
     });
-    if (!noteMode) {
-      // Guard: only auto-advance if puzzle grid is still intact (not yet solved/unmounted)
+    if (!noteMode && !solvedRef.current) {
       try {
         let found = false;
         outer: for (let rr = r; rr < n; rr++) {
