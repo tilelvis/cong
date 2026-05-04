@@ -114,15 +114,21 @@ export function GameBoard({ puzzle: initialPuzzle, level, onSolve, onFail }: Gam
       return { ...prev, grid: newGrid };
     });
     if (!noteMode) {
-      let found = false;
-      outer: for (let rr = r; rr < n; rr++) {
-        for (let cc = rr === r ? c + 1 : 0; cc < n; cc++) {
-          if (!puzzle.grid[rr][cc].isGiven && puzzle.grid[rr][cc].playerValue === 0) {
-            setSelected([rr, cc]); found = true; break outer;
+      // Guard: only auto-advance if puzzle grid is still intact (not yet solved/unmounted)
+      try {
+        let found = false;
+        outer: for (let rr = r; rr < n; rr++) {
+          for (let cc = rr === r ? c + 1 : 0; cc < n; cc++) {
+            const cell = puzzle.grid[rr]?.[cc];
+            if (cell && !cell.isGiven && cell.playerValue === 0) {
+              setSelected([rr, cc]); found = true; break outer;
+            }
           }
         }
+        if (!found) setSelected(null);
+      } catch {
+        setSelected(null);
       }
-      if (!found) setSelected(null);
     }
   }, [selected, puzzle, solved, n, noteMode]);
 
