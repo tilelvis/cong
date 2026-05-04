@@ -38,7 +38,8 @@ export async function POST(request: NextRequest) {
       RETURNING trials
     `)) as any;
 
-    if (!result.rows || result.rows.length === 0) {
+    const startRows = result as unknown as any[];
+    if (startRows.length === 0) {
       return NextResponse.json({ error: 'No trials remaining' }, { status: 402 });
     }
 
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       sessionId,
       puzzle: puzzleForClient,
-      trialsRemaining: Number(result.rows[0].trials),
+      trialsRemaining: Number(startRows[0].trials),
     });
   } catch (error) {
     if (error instanceof JwtErrors.JWTExpired) return NextResponse.json({ error: 'Token expired' }, { status: 401 });

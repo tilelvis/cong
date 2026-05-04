@@ -35,7 +35,7 @@ export async function GET(request: Request) {
       LIMIT 30
     `)) as any;
 
-    const resultRows = result.rows ?? [];
+    const resultRows = result as unknown as any[];
 
     const rows = resultRows.map((row: any) => ({
       invoice:         row.invoice,
