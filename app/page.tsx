@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useAlien } from "@alien_org/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { GameBoard } from "@/components/GameBoard";
@@ -55,7 +55,10 @@ export default function HomePage() {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [isStarting, setIsStarting] = useState(false);
   const [activeGame, setActiveGame] = useState<ActiveGame | null>(null);
+  const activeGameRef = useRef<ActiveGame | null>(null);
   const [trialsRemaining, setTrialsRemaining] = useState(0);
+
+  useEffect(() => { activeGameRef.current = activeGame; }, [activeGame]);
   const [result, setResult] = useState<GameResult | null>(null);
 
   // Touch tracking for swipe
@@ -104,12 +107,13 @@ export default function HomePage() {
   };
 
   const handleSolve = useCallback(async (params: { timeTakenMs: number; hintsUsed: number; errorCount: number }) => {
-    if (!authToken || !activeGame) return;
+    const game = activeGameRef.current;
+    if (!authToken || !game) return;
     try {
       const res = await fetch("/api/game/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${authToken}` },
-        body: JSON.stringify({ sessionId: activeGame.sessionId, ...params }),
+        body: JSON.stringify({ sessionId: game.sessionId, ...params }),
       });
       if (!res.ok) { toast.error("Failed to submit"); return; }
       const data = await res.json();
@@ -117,7 +121,7 @@ export default function HomePage() {
       setActiveGame(null);
       queryClient.invalidateQueries({ queryKey: ["wallet"] });
     } catch { toast.error("Network error."); }
-  }, [authToken, activeGame, queryClient]);
+  }, [authToken, queryClient]);
 
   const handleFail = useCallback(async () => {
     if (!authToken || !activeGame) return;
